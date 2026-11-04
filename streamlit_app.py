@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import os
 import json
+import base64
 import asyncio
 import subprocess
 import tempfile
@@ -9,242 +10,45 @@ import edge_tts
 from groq import Groq
 from google import genai
 
-st.set_page_config(page_title="Studio99 - Video Dub", layout="centered")
+st.set_page_config(page_title="Studio99 - Local Engine", layout="centered")
 
-# --- Studio99 Dark UI Styling ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e121a; color: #ffffff; }
-    .card {
-        background-color: #171c26;
-        padding: 16px;
-        border-radius: 14px;
-        border: 1px solid #262d3d;
-        margin-bottom: 15px;
-    }
     .stButton>button {
-        width: 100%;
-        background-color: #00e5ff;
-        color: #000000;
-        font-weight: bold;
-        border-radius: 10px;
-        height: 48px;
-        border: none;
+        width: 100%; background-color: #00e5ff; color: #000;
+        font-weight: bold; border-radius: 10px; height: 46px; border: none;
+    }
+    .step-box {
+        background: #171c26; border: 1px solid #262d3d;
+        padding: 14px; border-radius: 12px; margin-bottom: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h3 style='text-align: center; color: #fff;'>Studio99</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center; color: #fff; margin-bottom: 5px;'>Studio99 (Offline Video Engine)</h3>", unsafe_allow_html=True)
 
-# --- API Keys Setup ---
-with st.expander("🔑 API Keys & Voice Settings"):
+# --- 1. API Keys & TTS Settings ---
+with st.expander("🔑 API Keys & TTS အသံချိန်ညှိရန်", expanded=False):
     groq_key = st.text_input("Groq API Key (Whisper)", type="password")
     gemini_key = st.text_input("Gemini API Key", type="password")
-    
-    col_v1, col_v2 = st.columns(2)
-    with col_v1:
-        voice_opt = st.selectbox("Voice", ["my-MM-ThihaNeural", "my-MM-NilarNeural"])
-    with col_v2:
-        enable_sub = st.checkbox("မြန်မာစာတန်းထိုး ထည့်မည်", value=True)
-        
-    speed = st.slider("TTS Speed (%)", -30, 50, 10, step=5)
-    pitch = st.slider("TTS Pitch (Hz)", -30, 30, 0, step=5)
+    voice_opt = st.selectbox("Voice", ["my-MM-ThihaNeural", "my-MM-NilarNeural"])
+    col1, col2 = st.columns(2)
+    with col1:
+        speed = st.slider("Speed (%)", -30, 50, 10, step=5)
+    with col2:
+        pitch = st.slider("Pitch (Hz)", -30, 30, 0, step=5)
 
-# --- 1. Upload Video from Gallery ---
-uploaded_file = st.file_uploader("▶️ Gallery မှ ဗီဒီယို ရွေးမည်", type=["mp4", "mov", "mkv"])
-
-# --- 2. Interactive Touch Preview & Draggable Blur Boxes ---
-st.markdown("""
-<div class="card">
-    <p style="margin:0 0 8px 0; font-weight:bold; color:#00e5ff;">🖐️ Interactive Preview & Touch Blur</p>
-    <p style="font-size:12px; color:#9ba3b0; margin-bottom:10px;">
-        အောက်ပါ "📱 Preview အတွက် ဗီဒီယိုရွေးပါ" ကိုနှိပ်ပါက ဗီဒီယို ချက်ချင်းပေါ်လာပြီး Blur Box များကို လက်ဖြင့် ဖိဆွဲနိုင်ပါသည်။
-    </p>
-</div>
-""", unsafe_allow_html=True)
-
-touch_canvas_html = """
-<!DOCTYPE html>
-<html>
-<head>
-<style>
-  body { margin: 0; background: #0e121a; color: #fff; font-family: sans-serif; user-select: none; }
-  .upload-btn {
-    display: block; width: 95%; margin: 0 auto 10px auto; padding: 12px;
-    background: #171c26; border: 1.5px solid #00e5ff; color: #fff;
-    text-align: center; border-radius: 10px; font-weight: bold; cursor: pointer;
-  }
-  #player-box {
-    position: relative; width: 100%; max-width: 360px; height: 260px;
-    margin: 0 auto; background: #1c222e; border-radius: 12px; overflow: hidden;
-    display: flex; align-items: center; justify-content: center; border: 1px solid #2b3344;
-  }
-  video { width: 100%; height: 100%; object-fit: fill; display: none; }
-  #placeholder { color: #6c7585; font-size: 14px; text-align: center; }
-  .blur-rect {
-    position: absolute; backdrop-filter: blur(8px);
-    background: rgba(255,255,255,0.18); touch-action: none;
-    display: none; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: bold; border-radius: 4px;
-  }
-  #b1 { border: 2px dashed #00e5ff; color: #00e5ff; width: 70%; height: 16%; top: 75%; left: 15%; }
-  #b2 { border: 2px dashed #d500f9; color: #d500f9; width: 35%; height: 14%; top: 8%; left: 8%; }
-  .resizer {
-    width: 16px; height: 16px; position: absolute; right: 0; bottom: 0;
-    background: currentColor; cursor: se-resize; border-top-left-radius: 4px;
-  }
-  .controls {
-    background: #171c26; padding: 12px; border-radius: 12px; margin-top: 12px; border: 1px solid #262d3d;
-  }
-  .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
-  .coord-badge {
-    margin-top: 8px; padding: 8px; background: #0b0e14; border-radius: 6px;
-    font-family: monospace; font-size: 11px; color: #00e5ff; text-align: center;
-  }
-</style>
-</head>
-<body>
-
-<label class="upload-btn">
-  📱 Preview ချက်ချင်းကြည့်ရန် ဗီဒီယိုရွေးပါ
-  <input type="file" id="instant-vid" accept="video/*" style="display:none">
-</label>
-
-<div id="player-box">
-  <div id="placeholder">▶️<br>Preview မြင်ရရန် ဗီဒီယိုရွေးပါ</div>
-  <video id="vid" controls playsinline></video>
-  <div id="b1" class="blur-rect">Blur 1<div class="resizer" id="r1"></div></div>
-  <div id="b2" class="blur-rect">Blur 2<div class="resizer" id="r2"></div></div>
-</div>
-
-<div class="controls">
-  <div class="row">
-    <span style="color:#00e5ff; font-weight:bold;">Blur 1 (စာတန်းဖျောက်ရန်)</span>
-    <input type="checkbox" id="t1" style="transform: scale(1.4);">
-  </div>
-  <div class="row">
-    <span style="color:#d500f9; font-weight:bold;">Blur 2 (Logo ဖျောက်ရန်)</span>
-    <input type="checkbox" id="t2" style="transform: scale(1.4);">
-  </div>
-  <div class="coord-badge" id="coord-out">
-    {"b1": {"on": false, "x": 15, "y": 75, "w": 70, "h": 16}, "b2": {"on": false, "x": 8, "y": 8, "w": 35, "h": 14}}
-  </div>
-</div>
-
-<script>
-const vidInput = document.getElementById('instant-vid');
-const vid = document.getElementById('vid');
-const holder = document.getElementById('placeholder');
-const box = document.getElementById('player-box');
-const b1 = document.getElementById('b1');
-const b2 = document.getElementById('b2');
-const t1 = document.getElementById('t1');
-const t2 = document.getElementById('t2');
-const out = document.getElementById('coord-out');
-
-vidInput.onchange = (e) => {
-  const file = e.target.files[0];
-  if (file) {
-    vid.src = URL.createObjectURL(file);
-    vid.style.display = 'block';
-    holder.style.display = 'none';
-  }
-};
-
-t1.onchange = () => { b1.style.display = t1.checked ? 'flex' : 'none'; updateCoords(); };
-t2.onchange = () => { b2.style.display = t2.checked ? 'flex' : 'none'; updateCoords(); };
-
-function makeInteractive(el, resizer) {
-  let startX, startY, startLeft, startTop, startW, startH, mode = null;
-
-  el.addEventListener('pointerdown', (e) => {
-    mode = (e.target === resizer) ? 'resize' : 'drag';
-    startX = e.clientX; startY = e.clientY;
-    startLeft = el.offsetLeft; startTop = el.offsetTop;
-    startW = el.offsetWidth; startH = el.offsetHeight;
-    el.setPointerCapture(e.pointerId);
-  });
-
-  el.addEventListener('pointermove', (e) => {
-    if (!mode) return;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    if (mode === 'drag') {
-      let newL = Math.max(0, Math.min(box.clientWidth - el.offsetWidth, startLeft + dx));
-      let newT = Math.max(0, Math.min(box.clientHeight - el.offsetHeight, startTop + dy));
-      el.style.left = (newL / box.clientWidth * 100) + '%';
-      el.style.top = (newT / box.clientHeight * 100) + '%';
-    } else if (mode === 'resize') {
-      let newW = Math.max(30, Math.min(box.clientWidth - startLeft, startW + dx));
-      let newH = Math.max(20, Math.min(box.clientHeight - startTop, startH + dy));
-      el.style.width = (newW / box.clientWidth * 100) + '%';
-      el.style.height = (newH / box.clientHeight * 100) + '%';
-    }
-    updateCoords();
-  });
-
-  el.addEventListener('pointerup', (e) => { mode = null; el.releasePointerCapture(e.pointerId); });
-}
-
-function getPct(el, on) {
-  return {
-    on: on,
-    x: Math.round( parseFloat(el.style.left || 15) ),
-    y: Math.round( parseFloat(el.style.top || 75) ),
-    w: Math.round( parseFloat(el.style.width || 70) ),
-    h: Math.round( parseFloat(el.style.height || 16) )
-  };
-}
-
-function updateCoords() {
-  const data = { b1: getPct(b1, t1.checked), b2: getPct(b2, t2.checked) };
-  out.innerText = JSON.stringify(data);
-}
-
-makeInteractive(b1, document.getElementById('r1'));
-makeInteractive(b2, document.getElementById('r2'));
-</script>
-</body>
-</html>
-"""
-
-components.html(touch_canvas_html, height=470)
-
-blur_json_str = st.text_input(
-    "📌 အပေါ်တွင် လက်ဖြင့်ဆွဲထားသော Blur အချိုးအစား (ပြင်ရန်မလိုပါ၊ လိုအပ်ပါက Copy ကူးထည့်နိုင်သည်)",
-    value='{"b1": {"on": true, "x": 15, "y": 75, "w": 70, "h": 16}, "b2": {"on": false, "x": 8, "y": 8, "w": 35, "h": 14}}'
-)
-
-# --- 3. Video Ratio Section ---
-st.markdown('<div class="card"><b>📐 Video Ratio</b></div>', unsafe_allow_html=True)
-ratio = st.radio("Select Ratio", ["Original", "9:16", "16:9", "1:1", "4:3"], horizontal=True)
-
-# --- Helper Functions for Audio/Video Sync ---
+# --- Helper Functions (Server processes ONLY lightweight Audio & Text) ---
 def get_duration(file_path):
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
     try:
         return float(res.stdout.strip())
     except:
         return 1.0
 
-def get_video_dimensions(file_path):
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", file_path]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
-    try:
-        w, h = map(int, res.stdout.strip().split('x'))
-        return w, h
-    except:
-        return 720, 1280
-
-def format_srt_time(seconds):
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
-    return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
-
-async def make_synced_tts(segments, voice, rate_str, pitch_str, temp_dir):
+async def build_master_tts(segments, voice, rate_str, pitch_str, temp_dir):
     synced_files = []
     for i, seg in enumerate(segments):
         raw_tts = os.path.join(temp_dir, f"raw_{i}.mp3")
@@ -252,122 +56,404 @@ async def make_synced_tts(segments, voice, rate_str, pitch_str, temp_dir):
         text = seg.get("mm_text", "").strip()
         if not text:
             continue
-            
         comm = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str)
         await comm.save(raw_tts)
         
         tts_dur = get_duration(raw_tts)
         slot_dur = max(0.5, seg["end"] - seg["start"])
         
-        # မြန်မာအသံက မူရင်းစကားပြောချိန်ထက် ရှည်နေပါက ရုပ်နဲ့အသံကိုက်အောင် အသံနှုန်းကို အလိုအလျောက် ညှိပေးခြင်း
         if tts_dur > slot_dur:
-            speed_factor = min(1.85, tts_dur / slot_dur)
-            subprocess.run(["ffmpeg", "-y", "-i", raw_tts, "-filter:a", f"atempo={speed_factor}", sync_tts], check=True)
+            factor = min(1.85, tts_dur / slot_dur)
+            subprocess.run(["ffmpeg", "-y", "-i", raw_tts, "-filter:a", f"atempo={factor}", sync_tts], check=True)
             synced_files.append((sync_tts, seg["start"]))
         else:
             synced_files.append((raw_tts, seg["start"]))
+
+    master_mp3 = os.path.join(temp_dir, "master_tts.mp3")
+    if not synced_files:
+        return None
+
+    cmd = ["ffmpeg", "-y"]
+    for f_path, _ in synced_files:
+        cmd.extend(["-i", f_path])
+
+    fc = []
+    mix_inputs = ""
+    for i, (_, st_sec) in enumerate(synced_files):
+        d_ms = int(st_sec * 1000)
+        fc.append(f"[{i}:a]adelay={d_ms}|{d_ms}[a{i}];")
+        mix_inputs += f"[a{i}]"
+
+    fc.append(f"{mix_inputs}amix=inputs={len(synced_files)}:dropout_transition=0:normalize=0[outa]")
+    cmd.extend(["-filter_complex", "".join(fc), "-map", "[outa]", "-c:a", "libmp3lame", "-q:a", "4", master_mp3])
+    subprocess.run(cmd, check=True)
+    return master_mp3
+
+# --- Step 1: Upload ONLY tiny extracted audio (or small file) for AI ---
+st.markdown("""
+<div class="step-box">
+    <b>အဆင့် (၁) - အသံနားထောင်ရန်နှင့် ဘာသာပြန်ရန်</b><br>
+    <span style="font-size:12px; color:#9ba3b0;">
+        အောက်ပါ Studio99 Player မှ "🎵 အသံသီးသန့်ထုတ်မည် (1MB)" ဖြင့် ထုတ်ထားသော အသံဖိုင်လေးကို ဒီမှာထည့်ပြီး AI ဖြင့် ဘာသာပြန်ပါ။ (ဗီဒီယိုဖိုင်အကြီးကြီး တင်ရန်မလိုပါ)
+    </span>
+</div>
+""", unsafe_allow_html=True)
+
+audio_upload = st.file_uploader("🎵 ခွဲထုတ်ထားသော အသံဖိုင် (.wav / .mp3) ထည့်ပါ", type=["wav", "mp3", "m4a", "mp4"])
+
+if "ai_payload" not in st.session_state:
+    st.session_state.ai_payload = "null"
+
+if st.button("🧠 1. Whisper နားထောင်မည် + Gemini ဘာသာပြန် + TTS ထုတ်မည်"):
+    if not audio_upload or not groq_key or not gemini_key:
+        st.error("ကျေးဇူးပြု၍ API Key များနှင့် အသံဖိုင် ထည့်သွင်းပါ။")
+    else:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            in_aud = os.path.join(temp_dir, "input_audio.mp3")
+            raw_in = os.path.join(temp_dir, audio_upload.name)
+            with open(raw_in, "wb") as f:
+                f.write(audio_upload.read())
             
-    return synced_files
+            subprocess.run(["ffmpeg", "-y", "-i", raw_in, "-vn", "-acodec", "libmp3lame", "-ac", "1", "-ar", "16000", "-b:a", "32k", in_aud], check=True)
 
-# --- 4. Main Processing Pipeline ---
-if st.button("🚀 Start Auto Dubbing & Sync"):
-    if not uploaded_file:
-        st.warning("ကျေးဇူးပြု၍ အပေါ်ဆုံးရှိ 'Gallery မှ ဗီဒီယို ရွေးမည်' တွင် ဗီဒီယိုဖိုင် ထည့်ပေးပါ။")
-        st.stop()
-    if not groq_key or not gemini_key:
-        st.error("API Keys များ ထည့်သွင်းပေးပါ။")
-        st.stop()
+            st.info("🎧 Whisper ဖြင့် နားထောင်နေပါသည်...")
+            groq_client = Groq(api_key=groq_key)
+            with open(in_aud, "rb") as af:
+                trans = groq_client.audio.transcriptions.create(
+                    file=("audio.mp3", af.read()),
+                    model="whisper-large-v3-turbo",
+                    response_format="verbose_json"
+                )
+            segments = [{"id": i, "start": s["start"], "end": s["end"], "text": s["text"]} for i, s in enumerate(trans.segments)]
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        in_vid = os.path.join(temp_dir, "input.mp4")
-        in_aud = os.path.join(temp_dir, "audio.mp3")
-        srt_file = os.path.join(temp_dir, "sub.srt")
-        out_vid = os.path.join(temp_dir, "studio99_output.mp4")
-
-        with open(in_vid, "wb") as f:
-            f.write(uploaded_file.read())
-
-        vid_w, vid_h = get_video_dimensions(in_vid)
-
-        st.info("၁။ ဗီဒီယိုထဲမှ အသံကို Whisper ဖြင့် နားထောင်နေပါသည်...")
-        subprocess.run(["ffmpeg", "-y", "-i", in_vid, "-vn", "-acodec", "libmp3lame", "-q:a", "5", in_aud], check=True)
-
-        groq_client = Groq(api_key=groq_key)
-        with open(in_aud, "rb") as af:
-            trans = groq_client.audio.transcriptions.create(
-                file=("audio.mp3", af.read()),
-                model="whisper-large-v3-turbo",
-                response_format="verbose_json"
+            st.info("🌐 Gemini ဖြင့် မြန်မာဘာသာပြန်နေပါသည်...")
+            gem_client = genai.Client(api_key=gemini_key)
+            prompt = f"""
+            Translate these video segments into concise, natural spoken Burmese for voiceover dubbing.
+            Return ONLY a JSON array with keys: "id", "start", "end", "mm_text".
+            Segments: {json.dumps(segments, ensure_ascii=False)}
+            """
+            resp = gem_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={"response_mime_type": "application/json"}
             )
-        
-        segments = [{"id": i, "start": s["start"], "end": s["end"], "text": s["text"]} for i, s in enumerate(trans.segments)]
+            mm_segments = json.loads(resp.text)
 
-        st.info("၂။ Gemini ဖြင့် အချိန်ကိုက် မြန်မာဘာသာပြန်နေပါသည်...")
-        gem_client = genai.Client(api_key=gemini_key)
-        prompt = f"""
-        Translate these video segments into concise, natural spoken Burmese for video dubbing.
-        Keep each line brief so it fits the exact start and end time.
-        Return ONLY valid JSON array with keys: "id", "start", "end", "mm_text".
-        Segments: {json.dumps(segments, ensure_ascii=False)}
-        """
-        resp = gem_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config={"response_mime_type": "application/json"}
-        )
-        mm_segments = json.loads(resp.text)
+            st.info("🎙️ Edge-TTS အသံထုတ်ပြီး အချိန်ကိုက် ချိတ်ဆက်နေပါသည်...")
+            rate_str = f"{speed:+d}%"
+            pitch_str = f"{pitch:+d}Hz"
+            master_mp3 = asyncio.run(build_master_tts(mm_segments, voice_opt, rate_str, pitch_str, temp_dir))
 
-        with open(srt_file, "w", encoding="utf-8") as sf:
-            for idx, seg in enumerate(mm_segments, 1):
-                sf.write(f"{idx}\n{format_srt_time(seg['start'])} --> {format_srt_time(seg['end'])}\n{seg['mm_text']}\n\n")
+            if master_mp3 and os.path.exists(master_mp3):
+                with open(master_mp3, "rb") as mf:
+                    b64_audio = base64.b64encode(mf.read()).decode("utf-8")
+                st.session_state.ai_payload = json.dumps({
+                    "subs": mm_segments,
+                    "audio_b64": f"data:audio/mp3;base64,{b64_audio}"
+                }, ensure_ascii=False)
+                st.success("✅ AI အသံနှင့် မြန်မာစာတန်းထိုး အဆင်သင့်ဖြစ်ပါပြီ! အောက်ပါ Player တွင် Offline ပေါင်းစပ်နိုင်ပါပြီ။")
 
-        st.info("၃။ Edge-TTS အသံထုတ်ပြီး ရုပ်နှင့်အသံ အချိန်ကိုက်ညှိနေပါသည်...")
-        rate_str = f"{speed:+d}%"
-        pitch_str = f"{pitch:+d}Hz"
-        tts_list = asyncio.run(make_synced_tts(mm_segments, voice_opt, rate_str, pitch_str, temp_dir))
+# --- Step 2: Offline Local Video Studio (Zero Video Upload, Low CPU Canvas Render) ---
+local_studio_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {{ margin: 0; background: #0e121a; color: #fff; font-family: sans-serif; user-select: none; }}
+  .btn-gallery {{
+    display: block; width: 94%; margin: 6px auto 12px auto; padding: 13px;
+    background: #171c26; border: 1.5px solid #00e5ff; color: #fff;
+    text-align: center; border-radius: 12px; font-weight: bold; cursor: pointer;
+  }}
+  #stage {{
+    position: relative; width: 100%; max-width: 350px; height: 260px;
+    margin: 0 auto; background: #1c222e; border-radius: 14px; overflow: hidden;
+    border: 1px solid #2b3344; display: flex; align-items: center; justify-content: center;
+  }}
+  canvas {{ width: 100%; height: 100%; object-fit: contain; display: none; }}
+  #empty-msg {{ color: #6c7585; text-align: center; font-size: 14px; }}
+  .blur-box {{
+    position: absolute; border-radius: 4px; touch-action: none;
+    display: none; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: bold; background: rgba(255,255,255,0.12);
+  }}
+  #b1 {{ border: 2px dashed #00e5ff; color: #00e5ff; width: 70%; height: 15%; top: 76%; left: 15%; }}
+  #b2 {{ border: 2px dashed #d500f9; color: #d500f9; width: 32%; height: 14%; top: 8%; left: 8%; }}
+  .handle {{
+    width: 16px; height: 16px; position: absolute; right: 0; bottom: 0;
+    background: currentColor; border-top-left-radius: 4px;
+  }}
+  .card {{
+    background: #171c26; border: 1px solid #262d3d; border-radius: 12px;
+    padding: 12px; margin-top: 12px;
+  }}
+  .row {{ display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }}
+  .action-btn {{
+    width: 100%; padding: 12px; margin-top: 8px; border-radius: 10px;
+    border: none; font-weight: bold; cursor: pointer; font-size: 14px;
+  }}
+  .btn-extract {{ background: #263147; color: #00e5ff; border: 1px solid #00e5ff; }}
+  .btn-render {{ background: #00e5ff; color: #000; }}
+  #status {{ font-size: 12px; color: #00e5ff; text-align: center; margin-top: 8px; }}
+</style>
+</head>
+<body>
 
-        st.info("၄။ Blur၊ စာတန်းထိုး နှင့် အသံများကို ပေါင်းစပ်နေပါသည်...")
-        v_filters = []
-        blur_cfg = json.loads(blur_json_str)
+<label class="btn-gallery">
+  ▶️ Gallery မှ ရွေးမည် (Offline တန်းပေါ်မည်)
+  <input type="file" id="vid-file" accept="video/*" style="display:none">
+</label>
 
-        for key in ["b1", "b2"]:
-            b = blur_cfg.get(key, {})
-            if b.get("on"):
-                bx = int((b["x"] / 100.0) * vid_w)
-                by = int((b["y"] / 100.0) * vid_h)
-                bw = int((b["w"] / 100.0) * vid_w)
-                bh = int((b["h"] / 100.0) * vid_h)
-                v_filters.append(f"delogo=x={bx}:y={by}:w={bw}:h={bh}:show=0")
+<div id="stage">
+  <div id="empty-msg">▶️<br>Preview မြင်ရရန် ဗီဒီယိုရွေးပါ</div>
+  <canvas id="render-canvas"></canvas>
+  <div id="b1" class="blur-box">Blur 1<div class="handle" id="h1"></div></div>
+  <div id="b2" class="blur-box">Blur 2<div class="handle" id="h2"></div></div>
+</div>
 
-        if enable_sub:
-            esc_srt = srt_file.replace("\\", "/").replace(":", "\\:")
-            v_filters.append(f"subtitles='{esc_srt}':force_style='FontName=Noto Sans Myanmar,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2'")
+<video id="hidden-vid" playsinline crossorigin="anonymous" style="display:none"></video>
+<audio id="tts-audio" crossorigin="anonymous" style="display:none"></audio>
 
-        vf_chain = ",".join(v_filters) if v_filters else "null"
+<div class="card">
+  <div class="row">
+    <span style="color:#00e5ff; font-weight:bold;">Blur 1 (လက်ဖြင့် ဖိဆွဲရွှေ့ပါ)</span>
+    <input type="checkbox" id="chk1" style="transform:scale(1.4);">
+  </div>
+  <div class="row">
+    <span style="color:#d500f9; font-weight:bold;">Blur 2 (လက်ဖြင့် ဖိဆွဲရွှေ့ပါ)</span>
+    <input type="checkbox" id="chk2" style="transform:scale(1.4);">
+  </div>
+  <div class="row">
+    <span style="color:#fff; font-weight:bold;">မြန်မာစာတန်းထိုး (Subtitles)</span>
+    <input type="checkbox" id="chk-sub" checked style="transform:scale(1.4);">
+  </div>
+  <div class="row">
+    <span style="font-size:12px; color:#9ba3b0;">Video Ratio</span>
+    <select id="ratio-sel" style="background:#0e121a; color:#fff; border:1px solid #2b3344; padding:5px; border-radius:6px;">
+      <option value="orig">Original</option>
+      <option value="9:16">9:16 (TikTok/Reels)</option>
+      <option value="16:9">16:9 (YouTube)</option>
+      <option value="1:1">1:1</option>
+    </select>
+  </div>
 
-        cmd = ["ffmpeg", "-y", "-i", in_vid]
-        for f_path, _ in tts_list:
-            cmd.extend(["-i", f_path])
+  <button class="action-btn btn-extract" id="extract-btn">🎵 ၁။ အသံသီးသန့်ထုတ်မည် (AI ပို့ရန် ~1MB)</button>
+  <button class="action-btn btn-render" id="render-btn">🎬 ၂။ Offline Video + TTS Render ဆွဲမည်</button>
+  <div id="status">အဆင်သင့်ဖြစ်ပါပြီ။</div>
+</div>
 
-        fc = ["[0:a]volume=0.08[bg];"]
-        mix_str = "[bg]"
-        for i, (_, st_sec) in enumerate(tts_list, 1):
-            d_ms = int(st_sec * 1000)
-            fc.append(f"[{i}:a]adelay={d_ms}|{d_ms}[a{i}];")
-            mix_str += f"[a{i}]"
+<script>
+const aiData = {st.session_state.ai_payload};
+const vidFile = document.getElementById('vid-file');
+const vid = document.getElementById('hidden-vid');
+const ttsAudio = document.getElementById('tts-audio');
+const canvas = document.getElementById('render-canvas');
+const ctx = canvas.getContext('2d');
+const stage = document.getElementById('stage');
+const emptyMsg = document.getElementById('empty-msg');
+const b1 = document.getElementById('b1');
+const b2 = document.getElementById('b2');
+const chk1 = document.getElementById('chk1');
+const chk2 = document.getElementById('chk2');
+const chkSub = document.getElementById('chk-sub');
+const ratioSel = document.getElementById('ratio-sel');
+const statusEl = document.getElementById('status');
 
-        fc.append(f"{mix_str}amix=inputs={len(tts_list)+1}:dropout_transition=0:normalize=0[outa]")
+let currentFile = null;
 
-        cmd.extend([
-            "-filter_complex", "".join(fc),
-            "-vf", vf_chain,
-            "-map", "0:v", "-map", "[outa]",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
-            out_vid
-        ])
-        subprocess.run(cmd, check=True)
+if (aiData && aiData.audio_b64) {{
+  ttsAudio.src = aiData.audio_b64;
+  statusEl.innerText = "✅ AI ဘာသာပြန်နှင့် TTS အသံ အသင့်ရှိနေပါပြီ!";
+}}
 
-        st.success("✅ ရုပ်နှင့်အသံ အချိန်ကိုက် ဗီဒီယို ရရှိပါပြီ!")
-        st.video(out_vid)
-        with open(out_vid, "rb") as f:
-            st.download_button("⬇️ Download Video", f, file_name="studio99_dubbed.mp4", mime="video/mp4")
+vidFile.onchange = (e) => {{
+  currentFile = e.target.files[0];
+  if (!currentFile) return;
+  vid.src = URL.createObjectURL(currentFile);
+  vid.onloadedmetadata = () => {{
+    setupCanvasSize();
+    emptyMsg.style.display = 'none';
+    canvas.style.display = 'block';
+    vid.currentTime = 0.1;
+  }};
+  vid.onseeked = () => drawFrame();
+}};
+
+function setupCanvasSize() {{
+  const r = ratioSel.value;
+  if (r === '9:16') {{ canvas.width = 540; canvas.height = 960; }}
+  else if (r === '16:9') {{ canvas.width = 854; canvas.height = 480; }}
+  else if (r === '1:1') {{ canvas.width = 640; canvas.height = 640; }}
+  else {{
+    const scale = Math.min(1, 720 / Math.max(vid.videoWidth, vid.videoHeight));
+    canvas.width = Math.round(vid.videoWidth * scale);
+    canvas.height = Math.round(vid.videoHeight * scale);
+  }}
+  drawFrame();
+}}
+
+ratioSel.onchange = setupCanvasSize;
+chk1.onchange = () => {{ b1.style.display = chk1.checked ? 'flex' : 'none'; drawFrame(); }};
+chk2.onchange = () => {{ b2.style.display = chk2.checked ? 'flex' : 'none'; drawFrame(); }};
+
+function makeTouchDrag(el, handle) {{
+  let sx, sy, sl, st, sw, sh, mode = null;
+  el.onpointerdown = (e) => {{
+    mode = (e.target === handle) ? 'resize' : 'drag';
+    sx = e.clientX; sy = e.clientY;
+    sl = el.offsetLeft; st = el.offsetTop;
+    sw = el.offsetWidth; sh = el.offsetHeight;
+    el.setPointerCapture(e.pointerId);
+  }};
+  el.onpointermove = (e) => {{
+    if (!mode) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (mode === 'drag') {{
+      el.style.left = Math.max(0, Math.min(stage.clientWidth - el.offsetWidth, sl + dx)) / stage.clientWidth * 100 + '%';
+      el.style.top = Math.max(0, Math.min(stage.clientHeight - el.offsetHeight, st + dy)) / stage.clientHeight * 100 + '%';
+    }} else {{
+      el.style.width = Math.max(25, Math.min(stage.clientWidth - sl, sw + dx)) / stage.clientWidth * 100 + '%';
+      el.style.height = Math.max(20, Math.min(stage.clientHeight - st, sh + dy)) / stage.clientHeight * 100 + '%';
+    }}
+    drawFrame();
+  }};
+  el.onpointerup = (e) => {{ mode = null; el.releasePointerCapture(e.pointerId); }};
+}}
+makeTouchDrag(b1, document.getElementById('h1'));
+makeTouchDrag(b2, document.getElementById('h2'));
+
+function drawBlurZone(el) {{
+  const rx = (parseFloat(el.style.left || 15) / 100) * canvas.width;
+  const ry = (parseFloat(el.style.top || 76) / 100) * canvas.height;
+  const rw = (parseFloat(el.style.width || 70) / 100) * canvas.width;
+  const rh = (parseFloat(el.style.height || 15) / 100) * canvas.height;
+  ctx.save();
+  ctx.filter = 'blur(12px)';
+  ctx.drawImage(canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+  ctx.restore();
+}}
+
+function drawFrame() {{
+  if (!vid.videoWidth) return;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw Video Fit
+  const vr = vid.videoWidth / vid.videoHeight;
+  const cr = canvas.width / canvas.height;
+  let dw = canvas.width, dh = canvas.height, dx = 0, dy = 0;
+  if (vr > cr) {{ dh = canvas.width / vr; dy = (canvas.height - dh) / 2; }}
+  else {{ dw = canvas.height * vr; dx = (canvas.width - dw) / 2; }}
+  ctx.drawImage(vid, dx, dy, dw, dh);
+
+  if (chk1.checked) drawBlurZone(b1);
+  if (chk2.checked) drawBlurZone(b2);
+
+  // Draw Synced Subtitle
+  if (chkSub.checked && aiData && aiData.subs) {{
+    const t = vid.currentTime;
+    const active = aiData.subs.find(s => t >= s.start && t <= s.end);
+    if (active && active.mm_text) {{
+      ctx.font = 'bold ' + Math.round(canvas.width * 0.042) + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#000000';
+      ctx.fillStyle = '#ffffff';
+      const subY = canvas.height * 0.88;
+      ctx.strokeText(active.mm_text, canvas.width / 2, subY);
+      ctx.fillText(active.mm_text, canvas.width / 2, subY);
+    }}
+  }}
+}}
+
+// 1. Extract lightweight WAV audio locally in browser (No video upload!)
+document.getElementById('extract-btn').onclick = async () => {{
+  if (!currentFile) {{ alert('Gallery မှ ဗီဒီယို အရင်ရွေးပါ!'); return; }}
+  statusEl.innerText = "⏳ ဖုန်းထဲတွင် အသံသီးသန့် ခွဲထုတ်နေပါသည်...";
+  const arrayBuf = await currentFile.arrayBuffer();
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)({{ sampleRate: 16000 }});
+  const decoded = await audioCtx.decodeAudioData(arrayBuf);
+  const chan = decoded.getChannelData(0);
+
+  // Encode lightweight 16kHz Mono WAV
+  const wavBuf = new ArrayBuffer(44 + chan.length * 2);
+  const view = new DataView(wavBuf);
+  const writeStr = (off, s) => {{ for (let i=0;i<s.length;i++) view.setUint8(off+i, s.charCodeAt(i)); }};
+  writeStr(0, 'RIFF'); view.setUint32(4, 36 + chan.length * 2, true);
+  writeStr(8, 'WAVEfmt '); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  writeStr(36, 'data'); view.setUint32(40, chan.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < chan.length; i++, offset += 2) {{
+    let s = Math.max(-1, Math.min(1, chan[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }}
+  const blob = new Blob([view], {{ type: 'audio/wav' }});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'extracted_audio.wav';
+  a.click();
+  statusEl.innerText = "✅ extracted_audio.wav ဒေါင်းပြီးပါပြီ! အပေါ်ဆုံးအဆင့် (၁) တွင် ထည့်ပေးပါ။";
+}};
+
+// 2. Hardware-Accelerated Local Video + TTS Render (Gentle on Phone CPU, 24 FPS)
+document.getElementById('render-btn').onclick = async () => {{
+  if (!currentFile) {{ alert('Gallery မှ ဗီဒီယို အရင်ရွေးပါ!'); return; }}
+  if (!aiData || !aiData.audio_b64) {{ alert('အဆင့် (၁) တွင် AI အသံ အရင်ထုတ်ပေးပါ!'); return; }}
+
+  statusEl.innerText = "🎬 Offline Render ဆွဲနေပါသည် (ဖုန်း CPU သက်သာစေရန် 24fps ဖြင့် ဖမ်းယူနေသည်)...";
+  const stream = canvas.captureStream(24); // 24 FPS keeps mobile CPU cool
+
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const dest = audioCtx.createMediaStreamDestination();
+
+  const vidSrc = audioCtx.createMediaElementSource(vid);
+  const bgGain = audioCtx.createGain();
+  bgGain.gain.value = 0.08; // Lower original video sound to 8%
+  vidSrc.connect(bgGain).connect(dest);
+
+  const ttsSrc = audioCtx.createMediaElementSource(ttsAudio);
+  ttsSrc.connect(dest);
+  ttsSrc.connect(audioCtx.destination); // Let user hear progress
+
+  const combined = new MediaStream([...stream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+  const recorder = new MediaRecorder(combined, {{ mimeType: 'video/webm' }});
+  const chunks = [];
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = () => {{
+    const outBlob = new Blob(chunks, {{ type: 'video/webm' }});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(outBlob);
+    a.download = 'studio99_synced_video.webm';
+    a.click();
+    statusEl.innerText = "🎉 Render ပြီးပါပြီ! ဖုန်းထဲသို့ ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။";
+  }};
+
+  vid.currentTime = 0;
+  ttsAudio.currentTime = 0;
+  recorder.start();
+  vid.play();
+  ttsAudio.play();
+
+  function step() {{
+    if (!vid.paused && !vid.ended) {{
+      drawFrame();
+      requestAnimationFrame(step);
+    }}
+  }}
+  step();
+
+  vid.onended = () => {{
+    recorder.stop();
+    ttsAudio.pause();
+  }};
+}};
+</script>
+</body>
+</html>
+"""
+
+components.html(local_studio_html, height=620)
