@@ -5,24 +5,15 @@ import sys
 import asyncio
 import base64
 import json
-import threading
-import socket
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 st.set_page_config(page_title="Studio99", layout="centered")
 
-# --- 1. AUTO-INSTALL edge-tts IF MISSING (Prevents ModuleNotFoundError!) ---
+# --- 1. AUTO-INSTALL edge-tts IF MISSING ---
 try:
     import edge_tts
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "edge-tts"])
     import edge_tts
-
-# --- 2. ZERO-DEPENDENCY PYTHON EDGE-TTS WORKER (Uses Python Built-in Modules Only) ---
-@st.cache_resource
-def start_local_tts_bridge():
-    # Find a free port internally if needed, and also expose via parent postMessage/polling
-    pass
 
 async def generate_edge_tts_batch(segments, voice, rate, pitch):
     async def synth_one(seg):
@@ -50,7 +41,7 @@ async def generate_edge_tts_batch(segments, voice, rate, pitch):
     results = await asyncio.gather(*(synth_one(s) for s in segments))
     return [r for r in results if r is not None]
 
-# Check if Tornado is available (optional, wrapped in try/except so it NEVER crashes!)
+# Optional Tornado route for fast local Python edge-tts
 try:
     import tornado.web
     import gc
@@ -198,6 +189,10 @@ studio99_app = f"""
   .ratio-btn.active {{ border-color: #eab308; color: #eab308; background: #262418; }}
   .slider-row {{ margin-top: 10px; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; }}
   input[type="range"] {{ width: 100%; accent-color: #00e5ff; margin-top: 6px; }}
+  select {{
+    background: #0e121a; color: #00e5ff; border: 1px solid #2e384d;
+    padding: 6px 8px; border-radius: 6px; font-weight: bold; font-size: 12px;
+  }}
   .main-btn {{
     display: block; width: 96%; margin: 10px auto; padding: 15px;
     background: linear-gradient(90deg, #00e5ff, #00b8d4); color: #000;
@@ -282,18 +277,28 @@ studio99_app = f"""
   </div>
 </div>
 
-<!-- 5. TTS Settings -->
+<!-- 5. AI Model (3.5 / 3.8 Priority) & Edge-TTS Settings -->
 <div class="card">
-  <div class="card-title">🎙️ Edge-TTS & Sync Settings</div>
+  <div class="card-title">🤖 AI Model (3.5 / 3.8) & Edge-TTS Settings</div>
+  <div class="toggle-row">
+    <span>အဓိက သုံးမည့် Model</span>
+    <select id="model-sel">
+      <option value="auto_35_38">Auto (3.5 & 3.8 အဓိက + အလိုအလျောက်ပြောင်းမည်)</option>
+      <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+      <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+      <option value="gemini-3-flash-preview">Gemini 3.0 Flash</option>
+      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+    </select>
+  </div>
   <div class="toggle-row">
     <span>အသံ (Voice)</span>
-    <select id="voice-sel" style="background:#0e121a; color:#fff; border:1px solid #2e384d; padding:6px; border-radius:6px;">
+    <select id="voice-sel">
       <option value="my-MM-ThihaNeural">သီဟ - Male (Edge-TTS)</option>
       <option value="my-MM-NilarNeural">နီလာ - Female (Edge-TTS)</option>
     </select>
   </div>
-  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">+25%</span></div>
-  <input type="range" id="spd-slider" min="-100" max="100" step="5" value="25">
+  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">+35%</span></div>
+  <input type="range" id="spd-slider" min="-100" max="100" step="5" value="35">
   
   <div class="slider-row"><span>Pitch (အသံအနိမ့်အမြင့်)</span><span id="pit-val">0 Hz</span></div>
   <input type="range" id="pit-slider" min="-50" max="50" step="5" value="0">
@@ -604,11 +609,55 @@ function blobToBase64(blob) {{
   }});
 }}
 
-const GEMINI_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
-  "gemini-1.5-flash"
-];
+// --- SMART MODEL BUILDER: 3.5 & 3.8 FIRST + AUTO-DISCOVER FROM API KEY (NO MORE 1.5-FLASH!) ---
+async function buildSmartModelList(apiKey) {{
+  const selectedMode = document.getElementById('model-sel').value;
+  // Always prioritize 3.5 and 3.8 first as requested! (gemini-1.5-flash is 100% removed)
+  const priorityList = [
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
+    "gemini-3.5-pro",
+    "gemini-3.8-pro",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro"
+  ];
+
+  let finalModels = [];
+  if (selectedMode !== "auto_35_38") {{
+    finalModels.push(selectedMode);
+  }}
+  for (const m of priorityList) {{
+    if (!finalModels.includes(m)) finalModels.push(m);
+  }}
+
+  // Also query ListModels dynamically so any valid 3.x / 2.5 model on the user's key is guaranteed to work
+  try {{
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${{apiKey}}`);
+    if (res.ok) {{
+      const d = await res.json();
+      if (d.models) {{
+        const supported = d.models
+          .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"))
+          .map(m => m.name.replace("models/", ""))
+          .filter(name => !name.includes("1.5") && !name.includes("tts") && !name.includes("image") && !name.includes("embedding"));
+
+        // Put any discovered 3.x models right after 3.5/3.8
+        supported.sort((a, b) => {{
+          const a3 = a.includes("3") ? 0 : 1;
+          const b3 = b.includes("3") ? 0 : 1;
+          return a3 - b3;
+        }});
+
+        for (const sm of supported) {{
+          if (!finalModels.includes(sm)) finalModels.push(sm);
+        }}
+      }}
+    }}
+  }} catch (e) {{}}
+
+  return finalModels;
+}}
 
 async function tryGroqTranscribe(wavBlob, groqKeys) {{
   for (let kIdx = 0; kIdx < groqKeys.length; kIdx++) {{
@@ -641,14 +690,16 @@ async function tryGroqTranscribe(wavBlob, groqKeys) {{
 }}
 
 async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
-  let lastError = "Gemini Keys သို့မဟုတ် Models အားလုံး ခေတ္တပြည့်နေပါသည်။";
+  let realError = "API Key သို့မဟုတ် အင်တာနက်ချိတ်ဆက်မှု စစ်ဆေးပေးပါ။";
 
   for (let attempt = 1; attempt <= 2; attempt++) {{
     for (let kIdx = 0; kIdx < geminiKeys.length; kIdx++) {{
       const apiKey = geminiKeys[kIdx];
-      for (const modelName of GEMINI_MODELS) {{
+      const modelQueue = await buildSmartModelList(apiKey);
+
+      for (const modelName of modelQueue) {{
         try {{
-          logBox.innerText = `🌐 ${{taskLabel}} (${{modelName}} | Key #${{kIdx + 1}})...`;
+          logBox.innerText = `🌐 ${{taskLabel}} (Model: ${{modelName}} | Key #${{kIdx + 1}})...`;
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent?key=${{apiKey}}`;
           const res = await fetch(url, {{
             method: "POST",
@@ -664,8 +715,13 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
 
           const data = JSON.parse(rawBody);
           if (res.status === 429) {{
-            logBox.innerText = `⏳ Rate Limit ပြည့်နေသဖြင့် 4 စက္ကန့် စောင့်ပေးနေပါသည် (${{modelName}})...`;
+            logBox.innerText = `⏳ ${{modelName}} Limit ပြည့်နေသဖြင့် 4 စက္ကန့် စောင့်ပြီး နောက် Model ပြောင်းနေပါသည်...`;
             await sleep(4000);
+            continue;
+          }}
+
+          // If a specific model name returns 404 (not found), silently jump to next model without overwriting real errors!
+          if (res.status === 404) {{
             continue;
           }}
 
@@ -673,20 +729,20 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
           if (candidateText) {{
             return extractSafeJsonArray(candidateText);
           }} else if (data?.error?.message) {{
-            lastError = data.error.message;
+            realError = data.error.message;
           }}
         }} catch (err) {{
-          lastError = err.message;
+          realError = err.message;
         }}
       }}
     }}
     logBox.innerText = `⏳ ခေတ္တစောင့်ဆိုင်းပြီး ပြန်ကြိုးစားနေပါသည် (Attempt ${{attempt + 1}})...`;
-    await sleep(3000);
+    await sleep(3500);
   }}
-  throw new Error(lastError);
+  throw new Error(realError);
 }}
 
-// --- MULTI-ENGINE TTS (1. Python Edge-TTS Route -> 2. Gemini Single-Call Batch Audio -> 3. Multi-Proxy TTS) ---
+// --- MULTI-ENGINE TTS ---
 function pcmToWavArrayBuffer(pcmBytes, sampleRate = 24000) {{
   const wavBuf = new ArrayBuffer(44 + pcmBytes.length);
   const v = new DataView(wavBuf);
@@ -705,7 +761,7 @@ async function synthesizeAllTTS(segments, voiceName, ratePct, pitchHz, geminiKey
   const rateStr = (ratePct >= 0 ? '+' : '') + ratePct + '%';
   const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
 
-  // Method A: Try local Python Edge-TTS Route first
+  // Method A: Local Python Edge-TTS Route
   try {{
     const res = await fetch("/studio99_edge_tts", {{
       method: "POST",
@@ -729,11 +785,9 @@ async function synthesizeAllTTS(segments, voiceName, ratePct, pitchHz, geminiKey
         return list.sort((a, b) => a.start - b.start);
       }}
     }}
-  }} catch (e) {{
-    console.warn("Local route not active, using direct cloud TTS...", e);
-  }}
+  }} catch (e) {{}}
 
-  // Method B: Parallel Direct TTS with 4 CORS-friendly endpoints + Gemini TTS per segment
+  // Method B: Parallel Direct TTS + Gemini Native Audio TTS
   const validSubs = segments.filter(s => s.mm_text && String(s.mm_text).trim());
   const prebuiltVoice = voiceName.includes("Thiha") ? "Puck" : "Aoede";
 
@@ -741,7 +795,6 @@ async function synthesizeAllTTS(segments, voiceName, ratePct, pitchHz, geminiKey
     const text = String(seg.mm_text).trim();
     const enc = encodeURIComponent(text);
 
-    // 1. Try 3 different CORS-enabled TTS proxies
     const proxyUrls = [
       `https://api.allorigins.win/raw?url=` + encodeURIComponent(`https://translate.google.com/translate_tts?ie=UTF-8&q=${{enc}}&tl=my&client=tw-ob`),
       `https://corsproxy.io/?` + encodeURIComponent(`https://translate.google.com/translate_tts?ie=UTF-8&q=${{enc}}&tl=my&client=tw-ob`),
@@ -760,7 +813,6 @@ async function synthesizeAllTTS(segments, voiceName, ratePct, pitchHz, geminiKey
       }} catch (e) {{}}
     }}
 
-    // 2. Fallback to Gemini Native TTS API using user's Gemini Key (Zero CORS issues!)
     const gKey = geminiKeys[idx % geminiKeys.length];
     const ttsModels = ["gemini-2.5-flash-preview-tts", "gemini-2.0-flash-exp"];
     for (const m of ttsModels) {{
@@ -832,7 +884,7 @@ procBtn.onclick = async () => {{
       const promptText = `Translate these video transcript segments into natural, concise spoken Burmese for video dubbing. Keep each Burmese sentence brief so it matches the speaking duration. Return ONLY a JSON array of objects with keys: "id", "start", "end", "mm_text". Input: ${{JSON.stringify(rawSegs)}}`;
       subtitles = await runGeminiWithRetry([{{ text: promptText }}], geminiKeys, "၂/၄ - မြန်မာဘာသာပြန်နေသည်");
     }} else {{
-      logBox.innerText = "🎧 Groq မရသဖြင့် Gemini ဖြင့် တိုက်ရိုက်နားထောင်ပြီး ဘာသာပြန်နေပါသည်...";
+      logBox.innerText = "🎧 Groq မရသဖြင့် Gemini (3.5 / 3.8) ဖြင့် တိုက်ရိုက်နားထောင်ပြီး ဘာသာပြန်နေပါသည်...";
       const b64Audio = await blobToBase64(wavBlob);
       const audioPrompt = `Listen to this audio and translate the speech into concise spoken Burmese segments for dubbing with accurate timestamps in seconds. Return ONLY a valid JSON array of objects with keys: "id" (number), "start" (number in seconds), "end" (number in seconds), "mm_text" (Burmese string).`;
       subtitles = await runGeminiWithRetry([
@@ -937,7 +989,7 @@ procBtn.onclick = async () => {{
           }}
         }});
 
-        renderCanvasFrame(activeSubText);
+        renderCanvasFrame(activeSegText);
         requestAnimationFrame(syncRenderLoop);
       }}
     }}
@@ -961,4 +1013,4 @@ procBtn.onclick = async () => {{
 </html>
 """
 
-components.html(studio99_app, height=960, scrolling=True)
+components.html(studio99_app, height=980, scrolling=True)
