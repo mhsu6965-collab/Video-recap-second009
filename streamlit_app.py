@@ -14,8 +14,8 @@ st.markdown("""
 
 # --- API Keys Input (Saved in Session) ---
 with st.expander("🔑 API Keys ထည့်သွင်းရန် (Groq & Gemini)", expanded=False):
-    groq_key = st.text_input("Groq API Key (Whisper)", type="password")
-    gemini_key = st.text_input("Gemini API Key (Translator)", type="password")
+    groq_key = st.text_input("Groq API Key (Whisper)", type="password").strip()
+    gemini_key = st.text_input("Gemini API Key (Translator)", type="password").strip()
 
 # --- All-in-One Studio99 Offline Video Engine ---
 studio99_app = f"""
@@ -76,8 +76,8 @@ studio99_app = f"""
     font-weight: bold; cursor: pointer;
   }}
   .ratio-btn.active {{ border-color: #eab308; color: #eab308; background: #262418; }}
-  .slider-row {{ margin-top: 8px; font-size: 12px; color: #94a3b8; display: flex; justify-content: space-between; }}
-  input[type="range"] {{ width: 100%; accent-color: #00e5ff; margin-top: 4px; }}
+  .slider-row {{ margin-top: 10px; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; }}
+  input[type="range"] {{ width: 100%; accent-color: #00e5ff; margin-top: 6px; }}
   .main-btn {{
     display: block; width: 96%; margin: 10px auto; padding: 15px;
     background: linear-gradient(90deg, #00e5ff, #00b8d4); color: #000;
@@ -86,9 +86,9 @@ studio99_app = f"""
   }}
   .main-btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
   #log-box {{
-    width: 90%; margin: 8px auto; padding: 10px; background: #11151e;
+    width: 90%; margin: 8px auto; padding: 12px; background: #11151e;
     border-radius: 10px; font-size: 12px; color: #00e5ff; text-align: center;
-    border: 1px solid #1f2737; min-height: 22px;
+    border: 1px solid #1f2737; min-height: 22px; word-break: break-word;
   }}
 </style>
 </head>
@@ -140,7 +140,7 @@ studio99_app = f"""
   </div>
 </div>
 
-<!-- 5. TTS Speed & Pitch Card -->
+<!-- 5. TTS Speed (+100% / -100%) & Pitch Card -->
 <div class="card">
   <div class="card-title">🎙️ Edge-TTS & Sync Settings</div>
   <div class="toggle-row">
@@ -150,11 +150,11 @@ studio99_app = f"""
       <option value="my-MM-NilarNeural">နီလာ (Female)</option>
     </select>
   </div>
-  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">1.0x</span></div>
-  <input type="range" id="spd-slider" min="0.7" max="1.5" step="0.05" value="1.0">
+  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">0%</span></div>
+  <input type="range" id="spd-slider" min="-100" max="100" step="5" value="0">
   
   <div class="slider-row"><span>Pitch (အသံအနိမ့်အမြင့်)</span><span id="pit-val">0 Hz</span></div>
-  <input type="range" id="pit-slider" min="-20" max="20" step="2" value="0">
+  <input type="range" id="pit-slider" min="-50" max="50" step="5" value="0">
 </div>
 
 <div id="log-box">ဗီဒီယိုရွေးပြီးပါက အောက်ပါခလုတ်ကို နှိပ်ပါ။</div>
@@ -182,15 +182,21 @@ const procBtn = document.getElementById('process-btn');
 let selectedFile = null;
 let currentRatio = '9:16';
 let subtitles = [];
-let ttsAudioClips = [];
 
-// Sliders UI update
+// Sliders UI update (+100% / -100% format)
 const spdSlider = document.getElementById('spd-slider');
 const pitSlider = document.getElementById('pit-slider');
-spdSlider.oninput = () => document.getElementById('spd-val').innerText = spdSlider.value + 'x';
-pitSlider.oninput = () => document.getElementById('pit-val').innerText = pitSlider.value + ' Hz';
 
-// 1. Instant Local Video Load (0 MB Internet Upload)
+spdSlider.oninput = () => {{
+  const v = parseInt(spdSlider.value, 10);
+  document.getElementById('spd-val').innerText = (v > 0 ? '+' + v : v) + '%';
+}};
+pitSlider.oninput = () => {{
+  const v = parseInt(pitSlider.value, 10);
+  document.getElementById('pit-val').innerText = (v > 0 ? '+' + v : v) + ' Hz';
+}};
+
+// 1. Instant Local Video Load
 vidInput.onchange = (e) => {{
   selectedFile = e.target.files[0];
   if (!selectedFile) return;
@@ -200,6 +206,7 @@ vidInput.onchange = (e) => {{
     canvas.style.display = 'block';
     applyAspectRatio();
     vid.currentTime = 0.2;
+    logBox.style.color = "#00e5ff";
     logBox.innerText = "✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ (Offline Loaded)";
   }};
   vid.onseeked = () => renderCanvasFrame();
@@ -283,7 +290,7 @@ function renderCanvasFrame() {{
     const cur = vid.currentTime;
     const line = subtitles.find(s => cur >= s.start && cur <= s.end);
     if (line && line.mm_text) {{
-      const fSize = Math.round(canvas.width * 0.045);
+      const fSize = Math.round(canvas.width * 0.044);
       ctx.font = `bold ${{fSize}}px "Noto Sans Myanmar", sans-serif`;
       ctx.textAlign = 'center';
       ctx.lineWidth = 5;
@@ -296,7 +303,7 @@ function renderCanvasFrame() {{
   }}
 }}
 
-// Helper: Extract tiny internal WAV blob in memory (User never sees or downloads this)
+// Extract internal WAV blob in memory
 async function getInternalAudioBlob(file) {{
   const buf = await file.arrayBuffer();
   const actx = new (window.AudioContext || window.webkitAudioContext)({{ sampleRate: 16000 }});
@@ -318,13 +325,43 @@ async function getInternalAudioBlob(file) {{
   return new Blob([v], {{ type: 'audio/wav' }});
 }}
 
+// Robust Gemini Translator with Model Fallback & Safe Parsing
+async function translateWithGemini(rawSegs) {{
+  const models = ["gemini-2.5-flash", "gemini-1.5-flash"];
+  const promptText = `Translate these video transcript segments into natural, concise spoken Burmese for video dubbing. Return ONLY a valid JSON array of objects with keys: "id", "start", "end", "mm_text". Input: ${{JSON.stringify(rawSegs)}}`;
+
+  let lastErr = "Gemini API Error";
+  for (const m of models) {{
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${{m}}:generateContent?key=${{GEMINI_KEY}}`;
+    const res = await fetch(url, {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{
+        contents: [{{ parts: [{{ text: promptText }}] }}],
+        generationConfig: {{ responseMimeType: "application/json" }}
+      }})
+    }});
+    const data = await res.json();
+
+    if (data.candidates && data.candidates.length > 0 && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts.length > 0) {{
+      let rawText = data.candidates[0].content.parts[0].text.trim();
+      rawText = rawText.replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+      return JSON.parse(rawText);
+    }} else if (data.error && data.error.message) {{
+      lastErr = data.error.message;
+    }}
+  }}
+  throw new Error(lastErr);
+}}
+
 // 2. All-in-One Pipeline (Listen -> Translate -> TTS -> Sync Render)
 procBtn.onclick = async () => {{
   if (!selectedFile) {{ alert('Gallery မှ ဗီဒီယို အရင်ရွေးပါ!'); return; }}
-  if (!GROQ_KEY || !GEMINI_KEY) {{ alert('အပေါ်ဆုံးရှိ API Keys (Groq & Gemini) အရင်ထည့်ပါ!'); return; }}
+  if (!GROQ_KEY || !GEMINI_KEY) {{ alert('အပေါ်ဆုံးရှိ API Keys (Groq & Gemini) ကို နှိပ်ပြီး Key အရင်ထည့်ပါ!'); return; }}
 
   try {{
     procBtn.disabled = true;
+    logBox.style.color = "#00e5ff";
     logBox.innerText = "🎧 ၁/၄ - ဗီဒီယိုထဲမှ အသံကို Whisper ဖြင့် တိုက်ရိုက်နားထောင်နေပါသည်...";
     const wavBlob = await getInternalAudioBlob(selectedFile);
 
@@ -333,44 +370,40 @@ procBtn.onclick = async () => {{
     formData.append("model", "whisper-large-v3-turbo");
     formData.append("response_format", "verbose_json");
 
-    const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {{
+    const groqRes = await fetch("[https://api.groq.com/openai/v1/audio/transcriptions](https://api.groq.com/openai/v1/audio/transcriptions)", {{
       method: "POST",
       headers: {{ "Authorization": `Bearer ${{GROQ_KEY}}` }},
       body: formData
     }});
     const transData = await groqRes.json();
+
+    if (transData.error) {{
+      throw new Error("Groq Error: " + transData.error.message);
+    }}
+    if (!transData.segments || transData.segments.length === 0) {{
+      throw new Error("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ။");
+    }}
+
     const rawSegs = transData.segments.map((s, idx) => ({{
       id: idx, start: Number(s.start.toFixed(2)), end: Number(s.end.toFixed(2)), text: s.text
     }}));
 
     logBox.innerText = "🌐 ၂/၄ - Gemini ဖြင့် အချိန်ကိုက် မြန်မာဘာသာပြန်နေပါသည်...";
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${{GEMINI_KEY}}`;
-    const promptText = `Translate these video transcript segments into natural, concise spoken Burmese for video dubbing. Return ONLY a JSON array of objects with keys: "id", "start", "end", "mm_text". Input: ${{JSON.stringify(rawSegs)}}`;
+    subtitles = await translateWithGemini(rawSegs);
 
-    const gemRes = await fetch(geminiUrl, {{
-      method: "POST",
-      headers: {{ "Content-Type": "application/json" }},
-      body: JSON.stringify({{
-        contents: [{{ parts: [{{ text: promptText }}] }}],
-        generationConfig: {{ responseMimeType: "application/json" }}
-      }})
-    }});
-    const gemJson = await gemRes.json();
-    subtitles = JSON.parse(gemJson.candidates[0].content.parts[0].text);
-
-    logBox.innerText = "🎙️ ၃/၄ - TTS အသံထုတ်ပြီး ရုပ်နှင့်အသံ အချိန်ကိုက် ချိန်ညှိနေပါသည်...";
-    // Generate synced TTS audio using Google Translate TTS endpoint fallback for instant browser mixing
+    logBox.innerText = "🎬 ၃/၄ - ဗီဒီယို၊ Blur၊ စာတန်းထိုးနှင့် အသံကို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
 
-    // Lower original video background audio to 10%
-    const vidSource = audioCtx.createMediaElementSource(vid);
-    const bgGain = audioCtx.createGain();
-    bgGain.gain.value = 0.1;
-    vidSource.connect(bgGain).connect(dest);
+    if (!vid.audioConnected) {{
+      const vidSource = audioCtx.createMediaElementSource(vid);
+      const bgGain = audioCtx.createGain();
+      bgGain.gain.value = 0.1;
+      vidSource.connect(bgGain).connect(dest);
+      vid.audioConnected = true;
+    }}
 
-    logBox.innerText = "🎬 ၄/၄ - ဗီဒီယို၊ Blur၊ စာတန်းထိုးနှင့် အသံကို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
-    const canvasStream = canvas.captureStream(24); // 24fps keeps phone CPU cool
+    const canvasStream = canvas.captureStream(24);
     const finalStream = new MediaStream([
       ...canvasStream.getVideoTracks(),
       ...dest.stream.getAudioTracks()
@@ -385,13 +418,17 @@ procBtn.onclick = async () => {{
       a.href = URL.createObjectURL(finalBlob);
       a.download = 'Studio99_Dubbed_Video.webm';
       a.click();
+      logBox.style.color = "#00e676";
       logBox.innerText = "🎉 ရုပ်နှင့်အသံ အချိန်ကိုက် ဗီဒီယို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!";
       procBtn.disabled = false;
     }};
 
-    // Speak each translated segment at its exact timestamp
     let spokenIds = new Set();
-    const userSpeed = parseFloat(spdSlider.value);
+    // Convert -100% ~ +100% slider into rate multiplier (e.g., 0% -> 1.0, +50% -> 1.5, -50% -> 0.5)
+    const speedPct = parseInt(spdSlider.value, 10);
+    const baseRate = Math.max(0.25, 1.0 + (speedPct / 100.0));
+    const pitchHz = parseInt(pitSlider.value, 10);
+    const basePitch = Math.max(0.5, Math.min(2.0, 1.0 + (pitchHz / 100.0)));
 
     vid.currentTime = 0;
     recorder.start();
@@ -406,10 +443,10 @@ procBtn.onclick = async () => {{
             spokenIds.add(seg.id);
             const utter = new SpeechSynthesisUtterance(seg.mm_text);
             utter.lang = 'my-MM';
-            // Auto speed-up if text is long so voice stays synced with video
+            utter.pitch = basePitch;
             const slotDuration = Math.max(1, seg.end - seg.start);
-            const estDuration = seg.mm_text.length * 0.12;
-            utter.rate = Math.min(1.8, Math.max(userSpeed, estDuration / slotDuration));
+            const estDuration = seg.mm_text.length * 0.11;
+            utter.rate = Math.min(2.0, Math.max(baseRate, estDuration / slotDuration));
             window.speechSynthesis.speak(utter);
           }}
         }});
@@ -419,10 +456,11 @@ procBtn.onclick = async () => {{
     syncLoop();
 
     vid.onended = () => {{
-      recorder.stop();
+      if (recorder.state === "recording") recorder.stop();
     }};
 
   }} catch (err) {{
+    logBox.style.color = "#ff5252";
     logBox.innerText = "❌ Error: " + err.message;
     procBtn.disabled = false;
   }}
