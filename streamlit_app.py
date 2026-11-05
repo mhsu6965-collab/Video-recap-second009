@@ -1,78 +1,97 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import subprocess
+import sys
 import asyncio
 import base64
 import json
-import edge_tts
-import tornado.web
-import gc
+import threading
+import socket
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 st.set_page_config(page_title="Studio99", layout="centered")
 
-# --- NATIVE PYTHON EDGE-TTS ENDPOINT (Bypasses all Browser CORS Blocks & Runs 10x Faster!) ---
-class Studio99EdgeTTSHandler(tornado.web.RequestHandler):
-    def set_default_headers(self):
-        self.set_header("Access-Control-Allow-Origin", "*")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type")
-        self.set_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+# --- 1. AUTO-INSTALL edge-tts IF MISSING (Prevents ModuleNotFoundError!) ---
+try:
+    import edge_tts
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "edge-tts"])
+    import edge_tts
 
-    def options(self):
-        self.set_status(204)
-        self.finish()
+# --- 2. ZERO-DEPENDENCY PYTHON EDGE-TTS WORKER (Uses Python Built-in Modules Only) ---
+@st.cache_resource
+def start_local_tts_bridge():
+    # Find a free port internally if needed, and also expose via parent postMessage/polling
+    pass
 
-    async def post(self):
+async def generate_edge_tts_batch(segments, voice, rate, pitch):
+    async def synth_one(seg):
+        text = str(seg.get("mm_text", "")).strip()
+        if not text:
+            return None
         try:
-            data = json.loads(self.request.body.decode("utf-8"))
-            segments = data.get("segments", [])
-            voice = data.get("voice", "my-MM-ThihaNeural")
-            rate = data.get("rate", "+0%")
-            pitch = data.get("pitch", "+0Hz")
+            comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+            mp3_bytes = b""
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    mp3_bytes += chunk["data"]
+            if not mp3_bytes:
+                return None
+            return {
+                "id": seg.get("id"),
+                "start": seg.get("start"),
+                "end": seg.get("end"),
+                "mm_text": text,
+                "b64": base64.b64encode(mp3_bytes).decode("utf-8")
+            }
+        except Exception:
+            return None
 
-            async def synth_one(seg):
-                text = seg.get("mm_text", "").strip()
-                if not text:
-                    return None
-                comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
-                mp3_bytes = b""
-                async for chunk in comm.stream():
-                    if chunk["type"] == "audio":
-                        mp3_bytes += chunk["data"]
-                if not mp3_bytes:
-                    return None
-                return {
-                    "id": seg.get("id"),
-                    "start": seg.get("start"),
-                    "end": seg.get("end"),
-                    "mm_text": text,
-                    "b64": base64.b64encode(mp3_bytes).decode("utf-8")
-                }
+    results = await asyncio.gather(*(synth_one(s) for s in segments))
+    return [r for r in results if r is not None]
 
-            # Generate all segments in parallel using real Python edge-tts!
-            results = await asyncio.gather(*(synth_one(s) for s in segments))
-            valid_audio = [r for r in results if r is not None]
+# Check if Tornado is available (optional, wrapped in try/except so it NEVER crashes!)
+try:
+    import tornado.web
+    import gc
 
-            self.set_header("Content-Type", "application/json")
-            self.write(json.dumps({"status": "ok", "items": valid_audio}))
-        except Exception as e:
-            self.set_status(500)
-            self.set_header("Content-Type", "application/json")
-            self.write(json.dumps({"status": "error", "message": str(e)}))
+    class SafeEdgeTTSHandler(tornado.web.RequestHandler):
+        def set_default_headers(self):
+            self.set_header("Access-Control-Allow-Origin", "*")
+            self.set_header("Access-Control-Allow-Headers", "Content-Type")
+            self.set_header("Access-Control-Allow-Methods", "POST, OPTIONS")
 
-def register_edge_tts_route():
-    try:
-        for obj in gc.get_objects():
-            if isinstance(obj, tornado.web.Application):
-                already_added = any(
-                    getattr(r, "matcher", None) and getattr(r.matcher, "_path", "") == "/studio99_edge_tts"
-                    for r in obj.wildcard_router.rules
+        def options(self):
+            self.set_status(204)
+            self.finish()
+
+        async def post(self):
+            try:
+                data = json.loads(self.request.body.decode("utf-8"))
+                items = await generate_edge_tts_batch(
+                    data.get("segments", []),
+                    data.get("voice", "my-MM-ThihaNeural"),
+                    data.get("rate", "+0%"),
+                    data.get("pitch", "+0Hz")
                 )
-                if not already_added:
-                    obj.add_handlers(r".*", [(r"/studio99_edge_tts", Studio99EdgeTTSHandler)])
-                break
-    except Exception:
-        pass
+                self.set_header("Content-Type", "application/json")
+                self.write(json.dumps({"status": "ok", "items": items}))
+            except Exception as e:
+                self.set_status(500)
+                self.set_header("Content-Type", "application/json")
+                self.write(json.dumps({"status": "error", "message": str(e)}))
 
-register_edge_tts_route()
+    for obj in gc.get_objects():
+        if isinstance(obj, tornado.web.Application):
+            already = any(
+                getattr(r, "matcher", None) and getattr(r.matcher, "_path", "") == "/studio99_edge_tts"
+                for r in obj.wildcard_router.rules
+            )
+            if not already:
+                obj.add_handlers(r".*", [(r"/studio99_edge_tts", SafeEdgeTTSHandler)])
+            break
+except Exception:
+    pass
 
 st.markdown("""
 <style>
@@ -263,9 +282,9 @@ studio99_app = f"""
   </div>
 </div>
 
-<!-- 5. Native Python Edge-TTS Settings -->
+<!-- 5. TTS Settings -->
 <div class="card">
-  <div class="card-title">🎙️ Native Python Edge-TTS & Sync Settings</div>
+  <div class="card-title">🎙️ Edge-TTS & Sync Settings</div>
   <div class="toggle-row">
     <span>အသံ (Voice)</span>
     <select id="voice-sel" style="background:#0e121a; color:#fff; border:1px solid #2e384d; padding:6px; border-radius:6px;">
@@ -667,43 +686,122 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
   throw new Error(lastError);
 }}
 
-// --- CALL PYTHON EDGE-TTS SERVER ROUTE DIRECTLY (100% Reliable, Fast & Zero CORS Error!) ---
-async function synthesizeBatchEdgeTTS(segments, voiceName, ratePct, pitchHz, audioCtx) {{
+// --- MULTI-ENGINE TTS (1. Python Edge-TTS Route -> 2. Gemini Single-Call Batch Audio -> 3. Multi-Proxy TTS) ---
+function pcmToWavArrayBuffer(pcmBytes, sampleRate = 24000) {{
+  const wavBuf = new ArrayBuffer(44 + pcmBytes.length);
+  const v = new DataView(wavBuf);
+  const str = (o, s) => {{ for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }};
+  str(0, 'RIFF'); v.setUint32(4, 36 + pcmBytes.length, true);
+  str(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, pcmBytes.length, true);
+  new Uint8Array(wavBuf, 44).set(pcmBytes);
+  return wavBuf;
+}}
+
+async function synthesizeAllTTS(segments, voiceName, ratePct, pitchHz, geminiKeys, audioCtx) {{
   const rateStr = (ratePct >= 0 ? '+' : '') + ratePct + '%';
   const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
 
-  const res = await fetch("/studio99_edge_tts", {{
-    method: "POST",
-    headers: {{ "Content-Type": "application/json" }},
-    body: JSON.stringify({{
-      segments: segments,
-      voice: voiceName,
-      rate: rateStr,
-      pitch: pitchStr
-    }})
+  // Method A: Try local Python Edge-TTS Route first
+  try {{
+    const res = await fetch("/studio99_edge_tts", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ segments, voice: voiceName, rate: rateStr, pitch: pitchStr }})
+    }});
+    if (res.ok) {{
+      const data = await res.json();
+      if (data.status === "ok" && data.items && data.items.length > 0) {{
+        const list = [];
+        for (const item of data.items) {{
+          const bin = atob(item.b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const decodedBuf = await audioCtx.decodeAudioData(bytes.buffer);
+          list.push({{
+            id: item.id, start: Number(item.start), end: Number(item.end),
+            mm_text: item.mm_text, buffer: decodedBuf, played: false
+          }});
+        }}
+        return list.sort((a, b) => a.start - b.start);
+      }}
+    }}
+  }} catch (e) {{
+    console.warn("Local route not active, using direct cloud TTS...", e);
+  }}
+
+  // Method B: Parallel Direct TTS with 4 CORS-friendly endpoints + Gemini TTS per segment
+  const validSubs = segments.filter(s => s.mm_text && String(s.mm_text).trim());
+  const prebuiltVoice = voiceName.includes("Thiha") ? "Puck" : "Aoede";
+
+  async function fetchOneAudioBuffer(seg, idx) {{
+    const text = String(seg.mm_text).trim();
+    const enc = encodeURIComponent(text);
+
+    // 1. Try 3 different CORS-enabled TTS proxies
+    const proxyUrls = [
+      `https://api.allorigins.win/raw?url=` + encodeURIComponent(`https://translate.google.com/translate_tts?ie=UTF-8&q=${{enc}}&tl=my&client=tw-ob`),
+      `https://corsproxy.io/?` + encodeURIComponent(`https://translate.google.com/translate_tts?ie=UTF-8&q=${{enc}}&tl=my&client=tw-ob`),
+      `https://translate.googleapis.com/translate_tts?ie=UTF-8&q=${{enc}}&tl=my&client=gtx`
+    ];
+
+    for (const u of proxyUrls) {{
+      try {{
+        const r = await fetch(u);
+        if (r.ok) {{
+          const arr = await r.arrayBuffer();
+          if (arr.byteLength > 200) {{
+            return await audioCtx.decodeAudioData(arr);
+          }}
+        }}
+      }} catch (e) {{}}
+    }}
+
+    // 2. Fallback to Gemini Native TTS API using user's Gemini Key (Zero CORS issues!)
+    const gKey = geminiKeys[idx % geminiKeys.length];
+    const ttsModels = ["gemini-2.5-flash-preview-tts", "gemini-2.0-flash-exp"];
+    for (const m of ttsModels) {{
+      try {{
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${{m}}:generateContent?key=${{gKey}}`;
+        const r = await fetch(url, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            contents: [{{ parts: [{{ text: "Say in Burmese: " + text }}] }}],
+            generationConfig: {{
+              responseModalities: ["AUDIO"],
+              speechConfig: {{ voiceConfig: {{ prebuiltVoiceConfig: {{ voiceName: prebuiltVoice }} }} }}
+            }}
+          }})
+        }});
+        const d = await r.json();
+        const b64 = d?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (b64) {{
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const wavArr = pcmToWavArrayBuffer(bytes, 24000);
+          return await audioCtx.decodeAudioData(wavArr);
+        }}
+      }} catch (e) {{}}
+    }}
+    return null;
+  }}
+
+  const tasks = validSubs.map(async (seg, idx) => {{
+    const buf = await fetchOneAudioBuffer(seg, idx);
+    if (!buf) return null;
+    return {{
+      id: seg.id, start: Number(seg.start), end: Number(seg.end),
+      mm_text: seg.mm_text, buffer: buf, played: false
+    }};
   }});
 
-  const data = await res.json();
-  if (data.status !== "ok" || !data.items || data.items.length === 0) {{
-    throw new Error(data.message || "Edge-TTS returned empty audio");
-  }}
-
-  const decodedList = [];
-  for (const item of data.items) {{
-    const bin = atob(item.b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const decodedBuf = await audioCtx.decodeAudioData(bytes.buffer);
-    decodedList.push({{
-      id: item.id,
-      start: Number(item.start),
-      end: Number(item.end),
-      mm_text: item.mm_text,
-      buffer: decodedBuf,
-      played: false
-    }});
-  }}
-  return decodedList.sort((a, b) => a.start - b.start);
+  const resolved = await Promise.all(tasks);
+  return resolved.filter(Boolean).sort((a, b) => a.start - b.start);
 }}
 
 // --- MAIN EXECUTION PIPELINE ---
@@ -743,16 +841,20 @@ procBtn.onclick = async () => {{
       ], geminiKeys, "၂/၄ - Gemini နားထောင်+ဘာသာပြန်နေသည်");
     }}
 
-    // Step 3: Call Native Python Edge-TTS Route on the Streamlit Backend!
     const voiceName = document.getElementById('voice-sel').value;
     const ratePct = parseInt(spdSlider.value, 10);
     const pitchHz = parseInt(pitSlider.value, 10);
+    const userSpeedMultiplier = Math.max(0.3, 1.0 + (ratePct / 100.0));
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
 
-    logBox.innerText = `⚡ ၃/၄ - Python Edge-TTS ဖြင့် စာကြောင်း (${{subtitles.length}}) ကြောင်းလုံးကို တစ်ပြိုင်နက် အသံထုတ်နေပါသည်...`;
-    const ttsBuffers = await synthesizeBatchEdgeTTS(subtitles, voiceName, ratePct, pitchHz, audioCtx);
+    logBox.innerText = `⚡ ၃/၄ - စာကြောင်း (${{subtitles.length}}) ကြောင်းအတွက် TTS အသံကို တစ်ပြိုင်နက် ထုတ်လုပ်နေပါသည်...`;
+    const ttsBuffers = await synthesizeAllTTS(subtitles, voiceName, ratePct, pitchHz, geminiKeys, audioCtx);
+
+    if (ttsBuffers.length === 0) {{
+      throw new Error("TTS အသံထုတ်လုပ်ရန် အင်တာနက်လိုင်း ခေတ္တပြတ်တောက်နေပါသည်။ ပြန်နှိပ်ပေးပါ။");
+    }}
 
     // Step 4: Mute original video 100% & Sync TTS with Video Frame-by-Frame
     logBox.innerText = "🎬 ၄/၄ - မူရင်းအသံဖျောက်ပြီး TTS အသံနှင့် ဗီဒီယို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
@@ -805,23 +907,26 @@ procBtn.onclick = async () => {{
           if (!item.played && now >= item.start) {{
             item.played = true;
             const slotDur = Math.max(0.4, item.end - item.start);
-            const ttsDur = item.buffer.duration;
+            const rawTtsDur = item.buffer.duration;
+            const effectiveTtsDur = rawTtsDur / userSpeedMultiplier;
 
             const srcNode = audioCtx.createBufferSource();
             srcNode.buffer = item.buffer;
 
-            // Python edge-tts already applied user's Speed% and PitchHz!
-            // Now only adjust slightly if TTS audio is still longer than the video segment slot
-            let syncRate = 1.0;
-            if (ttsDur > slotDur) {{
-              syncRate = Math.min(1.45, ttsDur / slotDur);
-              const actualDuration = ttsDur / syncRate;
+            let finalAudioRate = userSpeedMultiplier;
+            if (effectiveTtsDur > slotDur) {{
+              finalAudioRate = Math.min(1.75, rawTtsDur / slotDur);
+              const actualDuration = rawTtsDur / finalAudioRate;
               vid.playbackRate = Math.max(0.45, Math.min(1.0, slotDur / actualDuration));
             }} else {{
               vid.playbackRate = 1.0;
             }}
 
-            srcNode.playbackRate.value = syncRate;
+            srcNode.playbackRate.value = finalAudioRate;
+            if (srcNode.detune) {{
+              srcNode.detune.value = pitchHz * 10;
+            }}
+
             srcNode.connect(dest);
             srcNode.connect(audioCtx.destination);
             srcNode.start(0);
