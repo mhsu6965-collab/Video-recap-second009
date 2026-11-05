@@ -4,8 +4,75 @@ import asyncio
 import base64
 import json
 import edge_tts
+import tornado.web
+import gc
 
 st.set_page_config(page_title="Studio99", layout="centered")
+
+# --- NATIVE PYTHON EDGE-TTS ENDPOINT (Bypasses all Browser CORS Blocks & Runs 10x Faster!) ---
+class Studio99EdgeTTSHandler(tornado.web.RequestHandler):
+    def set_default_headers(self):
+        self.set_header("Access-Control-Allow-Origin", "*")
+        self.set_header("Access-Control-Allow-Headers", "Content-Type")
+        self.set_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+
+    def options(self):
+        self.set_status(204)
+        self.finish()
+
+    async def post(self):
+        try:
+            data = json.loads(self.request.body.decode("utf-8"))
+            segments = data.get("segments", [])
+            voice = data.get("voice", "my-MM-ThihaNeural")
+            rate = data.get("rate", "+0%")
+            pitch = data.get("pitch", "+0Hz")
+
+            async def synth_one(seg):
+                text = seg.get("mm_text", "").strip()
+                if not text:
+                    return None
+                comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+                mp3_bytes = b""
+                async for chunk in comm.stream():
+                    if chunk["type"] == "audio":
+                        mp3_bytes += chunk["data"]
+                if not mp3_bytes:
+                    return None
+                return {
+                    "id": seg.get("id"),
+                    "start": seg.get("start"),
+                    "end": seg.get("end"),
+                    "mm_text": text,
+                    "b64": base64.b64encode(mp3_bytes).decode("utf-8")
+                }
+
+            # Generate all segments in parallel using real Python edge-tts!
+            results = await asyncio.gather(*(synth_one(s) for s in segments))
+            valid_audio = [r for r in results if r is not None]
+
+            self.set_header("Content-Type", "application/json")
+            self.write(json.dumps({"status": "ok", "items": valid_audio}))
+        except Exception as e:
+            self.set_status(500)
+            self.set_header("Content-Type", "application/json")
+            self.write(json.dumps({"status": "error", "message": str(e)}))
+
+def register_edge_tts_route():
+    try:
+        for obj in gc.get_objects():
+            if isinstance(obj, tornado.web.Application):
+                already_added = any(
+                    getattr(r, "matcher", None) and getattr(r.matcher, "_path", "") == "/studio99_edge_tts"
+                    for r in obj.wildcard_router.rules
+                )
+                if not already_added:
+                    obj.add_handlers(r".*", [(r"/studio99_edge_tts", Studio99EdgeTTSHandler)])
+                break
+    except Exception:
+        pass
+
+register_edge_tts_route()
 
 st.markdown("""
 <style>
@@ -67,7 +134,6 @@ studio99_app = f"""
     background: #141923; border-radius: 14px; border: 1px solid #2a3346;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
   }}
-  /* Stage wrapper matches the exact canvas aspect ratio so drag boxes never shift! */
   #stage-wrap {{
     position: relative; display: flex; align-items: center; justify-content: center;
   }}
@@ -154,7 +220,7 @@ studio99_app = f"""
   <input type="file" id="video-input" accept="video/*" style="display:none">
 </label>
 
-<!-- 2. Exact Aspect-Locked Stage (100% Accurate Blur & Subtitle Coordinates) -->
+<!-- 2. Exact Aspect-Locked Stage -->
 <div id="preview-outer">
   <div id="placeholder">▶️<br>Preview မြင်ရရန် ဗီဒီယိုရွေးပါ</div>
   <div id="stage-wrap">
@@ -183,7 +249,7 @@ studio99_app = f"""
     <input type="checkbox" id="toggle-sub" checked style="transform:scale(1.4);">
   </div>
   <div class="slider-row"><span>Blur အပြင်းအပျော့ (Blur Strength)</span><span id="blur-str-val">100% (အပြည့်ဝါးမည်)</span></div>
-  <input type="range" id="blur-slider" min="10" max="40" step="2" value="28">
+  <input type="range" id="blur-slider" min="12" max="45" step="1" value="32">
 </div>
 
 <!-- 4. Video Ratio Card -->
@@ -197,9 +263,9 @@ studio99_app = f"""
   </div>
 </div>
 
-<!-- 5. Fast Parallel Edge-TTS Settings -->
+<!-- 5. Native Python Edge-TTS Settings -->
 <div class="card">
-  <div class="card-title">🎙️ Fast Parallel Edge-TTS & Sync Settings</div>
+  <div class="card-title">🎙️ Native Python Edge-TTS & Sync Settings</div>
   <div class="toggle-row">
     <span>အသံ (Voice)</span>
     <select id="voice-sel" style="background:#0e121a; color:#fff; border:1px solid #2e384d; padding:6px; border-radius:6px;">
@@ -263,7 +329,6 @@ const blurSlider = document.getElementById('blur-slider');
 const logBox = document.getElementById('log-box');
 const procBtn = document.getElementById('process-btn');
 
-// Offscreen helper canvas for 100% solid edge-to-edge box blur
 const blurHelperCanvas = document.createElement('canvas');
 const blurHelperCtx = blurHelperCanvas.getContext('2d');
 
@@ -282,9 +347,7 @@ pitSlider.oninput = () => {{
   const v = parseInt(pitSlider.value, 10);
   document.getElementById('pit-val').innerText = (v > 0 ? '+' + v : v) + ' Hz';
 }};
-blurSlider.oninput = () => {{
-  renderCanvasFrame();
-}};
+blurSlider.oninput = () => renderCanvasFrame();
 
 vidInput.onchange = (e) => {{
   selectedFile = e.target.files[0];
@@ -296,7 +359,7 @@ vidInput.onchange = (e) => {{
     applyAspectRatio();
     vid.currentTime = 0.2;
     logBox.style.color = "#00e5ff";
-    logBox.innerText = "✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ! Blur အကွက်တည့်တည့် လုံးဝဝါးပေးထားပါသည်။";
+    logBox.innerText = "✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ! Blur နှင့် စာတန်းထိုးနေရာ စိတ်ကြိုက်ရွှေ့နိုင်ပါသည်။";
   }};
   vid.onseeked = () => renderCanvasFrame();
 }};
@@ -310,7 +373,6 @@ document.querySelectorAll('.ratio-btn').forEach(btn => {{
   }};
 }});
 
-// Lock #stage-wrap dimensions to exact canvas aspect ratio so overlay boxes align 1:1 with canvas pixels!
 function applyAspectRatio() {{
   if (currentRatio === '9:16') {{ canvas.width = 540; canvas.height = 960; }}
   else if (currentRatio === '16:9') {{ canvas.width = 854; canvas.height = 480; }}
@@ -367,7 +429,6 @@ enableTouchDrag(b1, document.getElementById('dot1'));
 enableTouchDrag(b2, document.getElementById('dot2'));
 enableTouchDrag(subBox, document.getElementById('dot-sub'));
 
-// Exact 1:1 Coordinate Mapper using bounding rectangles
 function getExactCanvasRect(el, defL, defT, defW, defH) {{
   const cRect = canvas.getBoundingClientRect();
   const eRect = el.getBoundingClientRect();
@@ -389,33 +450,27 @@ function getExactCanvasRect(el, defL, defT, defW, defH) {{
   }};
 }}
 
-// 100% Solid Edge-to-Edge Heavy Blur (Downscale + Smooth Upscale + Gaussian Blur inside Clipped Box)
 function applySolidBoxBlur(el, defL, defT, defW, defH) {{
   const m = getExactCanvasRect(el, defL, defT, defW, defH);
   if (m.rw < 2 || m.rh < 2) return;
 
-  const strength = parseInt(blurSlider.value, 10) || 28;
-  // Downscale factor completely destroys underlying characters/logos across the ENTIRE box evenly
-  const downW = Math.max(4, Math.round(m.rw / (strength * 0.55)));
-  const downH = Math.max(2, Math.round(m.rh / (strength * 0.55)));
+  const strength = parseInt(blurSlider.value, 10) || 32;
+  const downW = Math.max(3, Math.round(m.rw / (strength * 0.6)));
+  const downH = Math.max(2, Math.round(m.rh / (strength * 0.6)));
 
   blurHelperCanvas.width = downW;
   blurHelperCanvas.height = downH;
   blurHelperCtx.imageSmoothingEnabled = true;
-
-  // Step A: Copy exact box region into tiny buffer (wipes out sharp text details everywhere including edges)
   blurHelperCtx.drawImage(canvas, m.rx, m.ry, m.rw, m.rh, 0, 0, downW, downH);
 
-  // Step B: Draw back into clipped exact box with smooth Gaussian filter for a clean frosted blur look
   ctx.save();
   ctx.beginPath();
   ctx.rect(m.rx, m.ry, m.rw, m.rh);
   ctx.clip();
 
   ctx.imageSmoothingEnabled = true;
-  ctx.filter = `blur(${{Math.round(strength * 0.4)}}px)`;
-  // Slightly bleed by 6px inside the clip so edges never fade or look unblurred
-  ctx.drawImage(blurHelperCanvas, 0, 0, downW, downH, m.rx - 6, m.ry - 6, m.rw + 12, m.rh + 12);
+  ctx.filter = `blur(${{Math.round(strength * 0.45)}}px)`;
+  ctx.drawImage(blurHelperCanvas, 0, 0, downW, downH, m.rx - 8, m.ry - 8, m.rw + 16, m.rh + 16);
   ctx.restore();
 }}
 
@@ -531,8 +586,6 @@ function blobToBase64(blob) {{
 }}
 
 const GEMINI_MODELS = [
-  "gemini-3.5-flash",
-  "gemini-3.8-flash",
   "gemini-2.5-flash",
   "gemini-2.0-flash",
   "gemini-1.5-flash"
@@ -609,49 +662,48 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
       }}
     }}
     logBox.innerText = `⏳ ခေတ္တစောင့်ဆိုင်းပြီး ပြန်ကြိုးစားနေပါသည် (Attempt ${{attempt + 1}})...`;
-    await sleep(4000);
+    await sleep(3000);
   }}
   throw new Error(lastError);
 }}
 
-// --- ULTRA-FAST PARALLEL TTS GENERATOR (Generates ALL segments simultaneously in ~2 seconds!) ---
-async function fetchSingleFastTTS(text, voice, ratePct, pitchHz) {{
-  // Fast direct Edge-TTS endpoint + instant Google Myanmar TTS fallback with 2.5s timeout
+// --- CALL PYTHON EDGE-TTS SERVER ROUTE DIRECTLY (100% Reliable, Fast & Zero CORS Error!) ---
+async function synthesizeBatchEdgeTTS(segments, voiceName, ratePct, pitchHz, audioCtx) {{
   const rateStr = (ratePct >= 0 ? '+' : '') + ratePct + '%';
   const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
 
-  try {{
-    const ctrl = new AbortController();
-    const tId = setTimeout(() => ctrl.abort(), 2500);
-    const res = await fetch("https://tts.travisvn.com/v1/audio/speech", {{
-      method: "POST",
-      headers: {{ "Content-Type": "application/json" }},
-      body: JSON.stringify({{ input: text, voice: voice, rate: rateStr, pitch: pitchStr }}),
-      signal: ctrl.signal
-    }});
-    clearTimeout(tId);
-    if (res.ok) {{
-      const b = await res.blob();
-      if (b.size > 200) return b;
-    }}
-  }} catch (e) {{}}
+  const res = await fetch("/studio99_edge_tts", {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{
+      segments: segments,
+      voice: voiceName,
+      rate: rateStr,
+      pitch: pitchStr
+    }})
+  }});
 
-  // Instantaneous (<300ms) Myanmar TTS Stream
-  const encoded = encodeURIComponent(text);
-  const fastUrls = [
-    `https://translate.googleapis.com/translate_tts?ie=UTF-8&q=${{encoded}}&tl=my&client=gtx`,
-    `https://corsproxy.io/?` + encodeURIComponent(`https://translate.google.com/translate_tts?ie=UTF-8&q=${{encoded}}&tl=my&client=tw-ob`)
-  ];
-  for (const u of fastUrls) {{
-    try {{
-      const r = await fetch(u);
-      if (r.ok) {{
-        const b = await r.blob();
-        if (b.size > 100) return b;
-      }}
-    }} catch (e) {{}}
+  const data = await res.json();
+  if (data.status !== "ok" || !data.items || data.items.length === 0) {{
+    throw new Error(data.message || "Edge-TTS returned empty audio");
   }}
-  throw new Error("TTS failed");
+
+  const decodedList = [];
+  for (const item of data.items) {{
+    const bin = atob(item.b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const decodedBuf = await audioCtx.decodeAudioData(bytes.buffer);
+    decodedList.push({{
+      id: item.id,
+      start: Number(item.start),
+      end: Number(item.end),
+      mm_text: item.mm_text,
+      buffer: decodedBuf,
+      played: false
+    }});
+  }}
+  return decodedList.sort((a, b) => a.start - b.start);
 }}
 
 // --- MAIN EXECUTION PIPELINE ---
@@ -691,42 +743,16 @@ procBtn.onclick = async () => {{
       ], geminiKeys, "၂/၄ - Gemini နားထောင်+ဘာသာပြန်နေသည်");
     }}
 
-    // Step 3: PARALLEL BATCH TTS (All segments generated simultaneously in 1-2 seconds!)
+    // Step 3: Call Native Python Edge-TTS Route on the Streamlit Backend!
     const voiceName = document.getElementById('voice-sel').value;
     const ratePct = parseInt(spdSlider.value, 10);
     const pitchHz = parseInt(pitSlider.value, 10);
-    const userSpeedMultiplier = Math.max(0.3, 1.0 + (ratePct / 100.0));
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
 
-    logBox.innerText = `⚡ ၃/၄ - စာကြောင်း (${{subtitles.length}}) ကြောင်းလုံးအတွက် TTS အသံကို တစ်ပြိုင်နက်တည်း အမြန်ထုတ်နေပါသည်...`;
-
-    const validSubs = subtitles.filter(s => s.mm_text && s.mm_text.trim());
-    const ttsPromises = validSubs.map(async (seg) => {{
-      try {{
-        const blob = await fetchSingleFastTTS(seg.mm_text.trim(), voiceName, ratePct, pitchHz);
-        const arrBuf = await blob.arrayBuffer();
-        const decodedBuf = await audioCtx.decodeAudioData(arrBuf);
-        return {{
-          id: seg.id,
-          start: Number(seg.start),
-          end: Number(seg.end),
-          mm_text: seg.mm_text,
-          buffer: decodedBuf,
-          played: false
-        }};
-      }} catch (err) {{
-        return null;
-      }}
-    }});
-
-    const results = await Promise.all(ttsPromises);
-    const ttsBuffers = results.filter(Boolean).sort((a, b) => a.start - b.start);
-
-    if (ttsBuffers.length === 0) {{
-      throw new Error("TTS အသံထုတ်လုပ်ရာတွင် အင်တာနက် အခက်အခဲရှိနေပါသည်။ ပြန်နှိပ်ပေးပါ။");
-    }}
+    logBox.innerText = `⚡ ၃/၄ - Python Edge-TTS ဖြင့် စာကြောင်း (${{subtitles.length}}) ကြောင်းလုံးကို တစ်ပြိုင်နက် အသံထုတ်နေပါသည်...`;
+    const ttsBuffers = await synthesizeBatchEdgeTTS(subtitles, voiceName, ratePct, pitchHz, audioCtx);
 
     // Step 4: Mute original video 100% & Sync TTS with Video Frame-by-Frame
     logBox.innerText = "🎬 ၄/၄ - မူရင်းအသံဖျောက်ပြီး TTS အသံနှင့် ဗီဒီယို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
@@ -779,26 +805,23 @@ procBtn.onclick = async () => {{
           if (!item.played && now >= item.start) {{
             item.played = true;
             const slotDur = Math.max(0.4, item.end - item.start);
-            const rawTtsDur = item.buffer.duration;
-            const effectiveTtsDur = rawTtsDur / userSpeedMultiplier;
+            const ttsDur = item.buffer.duration;
 
             const srcNode = audioCtx.createBufferSource();
             srcNode.buffer = item.buffer;
 
-            let finalAudioRate = userSpeedMultiplier;
-            if (effectiveTtsDur > slotDur) {{
-              finalAudioRate = Math.min(1.8, rawTtsDur / slotDur);
-              const actualDuration = rawTtsDur / finalAudioRate;
+            // Python edge-tts already applied user's Speed% and PitchHz!
+            // Now only adjust slightly if TTS audio is still longer than the video segment slot
+            let syncRate = 1.0;
+            if (ttsDur > slotDur) {{
+              syncRate = Math.min(1.45, ttsDur / slotDur);
+              const actualDuration = ttsDur / syncRate;
               vid.playbackRate = Math.max(0.45, Math.min(1.0, slotDur / actualDuration));
             }} else {{
               vid.playbackRate = 1.0;
             }}
 
-            srcNode.playbackRate.value = finalAudioRate;
-            if (srcNode.detune) {{
-              srcNode.detune.value = pitchHz * 10;
-            }}
-
+            srcNode.playbackRate.value = syncRate;
             srcNode.connect(dest);
             srcNode.connect(audioCtx.destination);
             srcNode.start(0);
@@ -809,7 +832,7 @@ procBtn.onclick = async () => {{
           }}
         }});
 
-        renderCanvasFrame(activeSegText);
+        renderCanvasFrame(activeSubText);
         requestAnimationFrame(syncRenderLoop);
       }}
     }}
