@@ -7,17 +7,20 @@ st.set_page_config(page_title="Studio99", layout="centered")
 st.markdown("""
 <style>
     .stApp { background-color: #0e121a; color: #ffffff; }
-    .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 450px; }
+    .block-container { padding-top: 0.5rem; padding-bottom: 1rem; max-width: 450px; }
     header, footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- API Keys Input (Saved in Session) ---
-with st.expander("🔑 API Keys ထည့်သွင်းရန် (Groq & Gemini)", expanded=False):
-    groq_key = st.text_input("Groq API Key (Whisper)", type="password").strip()
-    gemini_key = st.text_input("Gemini API Key (Translator)", type="password").strip()
+# Optional: Load keys from Streamlit Cloud Secrets if configured
+secret_groq = ""
+secret_gemini = ""
+try:
+    secret_groq = st.secrets.get("GROQ_KEYS", "")
+    secret_gemini = st.secrets.get("GEMINI_KEYS", "")
+except Exception:
+    pass
 
-# --- All-in-One Studio99 Offline Video Engine ---
 studio99_app = f"""
 <!DOCTYPE html>
 <html>
@@ -30,8 +33,25 @@ studio99_app = f"""
     font-family: 'Noto Sans Myanmar', sans-serif; user-select: none;
   }}
   .top-bar {{
-    display: flex; justify-content: center; align-items: center;
-    padding: 10px 0 14px 0; font-size: 18px; font-weight: bold;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px 12px 14px; font-size: 18px; font-weight: bold;
+  }}
+  .key-btn {{
+    background: #1c2436; border: 1px solid #00e5ff; color: #00e5ff;
+    padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer;
+  }}
+  #key-drawer {{
+    display: none; width: 90%; margin: 0 auto 14px auto; background: #151a24;
+    border: 1px solid #00e5ff; border-radius: 12px; padding: 12px;
+  }}
+  textarea {{
+    width: 95%; height: 55px; background: #0b0e14; color: #00e5ff;
+    border: 1px solid #2e384d; border-radius: 8px; padding: 6px;
+    font-size: 11px; font-family: monospace; margin-bottom: 8px;
+  }}
+  .save-key-btn {{
+    width: 100%; padding: 8px; background: #00e5ff; color: #000;
+    border: none; border-radius: 8px; font-weight: bold; cursor: pointer;
   }}
   .gallery-btn {{
     display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -88,13 +108,31 @@ studio99_app = f"""
   #log-box {{
     width: 90%; margin: 8px auto; padding: 12px; background: #11151e;
     border-radius: 10px; font-size: 12px; color: #00e5ff; text-align: center;
-    border: 1px solid #1f2737; min-height: 22px; word-break: break-word;
+    border: 1px solid #1f2737; min-height: 24px; word-break: break-word; line-height: 1.5;
   }}
 </style>
 </head>
 <body>
 
-<div class="top-bar">Studio99</div>
+<div class="top-bar">
+  <span>Studio99</span>
+  <button class="key-btn" id="open-key-btn">🔑 API Keys (အသေသိမ်းရန်)</button>
+</div>
+
+<!-- Persistent Multi-Key Drawer (Saved in Phone Browser localStorage) -->
+<div id="key-drawer">
+  <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">
+    📌 <b>Gemini Keys (၂ ခု ၃ ခု ထည့်နိုင်သည်):</b> တစ်ကြောင်းလျှင် Key တစ်ခုနှုန်း (သို့) ကော်မာခံပြီး ထည့်ပါ။ တစ်ခါသိမ်းထားရုံဖြင့် အမြဲမှတ်ထားပါမည်။
+  </div>
+  <textarea id="gemini-keys-input" placeholder="AIzaSy...&#10;AIzaSy..."></textarea>
+
+  <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">
+    📌 <b>Groq Keys (၂ ခု ၃ ခု ထည့်နိုင်သည်):</b> မထည့်ထားလျှင်လည်း Gemini က တိုက်ရိုက်နားထောင်ပေးပါမည်။
+  </div>
+  <textarea id="groq-keys-input" placeholder="gsk_...&#10;gsk_..."></textarea>
+
+  <button class="save-key-btn" id="save-keys-btn">💾 ဖုန်းထဲတွင် အသေသိမ်းမည် (Save Keys)</button>
+</div>
 
 <!-- 1. Instant Offline Gallery Picker -->
 <label class="gallery-btn">
@@ -162,8 +200,33 @@ studio99_app = f"""
 <button class="main-btn" id="process-btn">🚀 နားထောင်မည် + ဘာသာပြန် + ရုပ်/သံကိုက် ထုတ်မည်</button>
 
 <script>
-const GROQ_KEY = "{groq_key}";
-const GEMINI_KEY = "{gemini_key}";
+const DEFAULT_GROQ = `{secret_groq}`;
+const DEFAULT_GEMINI = `{secret_gemini}`;
+
+const keyDrawer = document.getElementById('key-drawer');
+const openKeyBtn = document.getElementById('open-key-btn');
+const saveKeysBtn = document.getElementById('save-keys-btn');
+const gemInput = document.getElementById('gemini-keys-input');
+const groqInput = document.getElementById('groq-keys-input');
+
+// Load saved keys from phone localStorage on startup
+gemInput.value = localStorage.getItem('s99_gemini_keys') || DEFAULT_GEMINI;
+groqInput.value = localStorage.getItem('s99_groq_keys') || DEFAULT_GROQ;
+
+openKeyBtn.onclick = () => {{
+  keyDrawer.style.display = keyDrawer.style.display === 'block' ? 'none' : 'block';
+}};
+
+saveKeysBtn.onclick = () => {{
+  localStorage.setItem('s99_gemini_keys', gemInput.value.trim());
+  localStorage.setItem('s99_groq_keys', groqInput.value.trim());
+  keyDrawer.style.display = 'none';
+  document.getElementById('log-box').innerText = "✅ API Key များကို ဖုန်းထဲတွင် အသေသိမ်းဆည်းပြီးပါပြီ!";
+}};
+
+function parseKeyList(rawStr) {{
+  return rawStr.split(/[\\n,]+/).map(k => k.trim()).filter(k => k.length > 5);
+}}
 
 const vidInput = document.getElementById('video-input');
 const vid = document.getElementById('src-video');
@@ -183,7 +246,6 @@ let selectedFile = null;
 let currentRatio = '9:16';
 let subtitles = [];
 
-// Sliders UI update (+100% / -100% format)
 const spdSlider = document.getElementById('spd-slider');
 const pitSlider = document.getElementById('pit-slider');
 
@@ -196,7 +258,6 @@ pitSlider.oninput = () => {{
   document.getElementById('pit-val').innerText = (v > 0 ? '+' + v : v) + ' Hz';
 }};
 
-// 1. Instant Local Video Load
 vidInput.onchange = (e) => {{
   selectedFile = e.target.files[0];
   if (!selectedFile) return;
@@ -212,7 +273,6 @@ vidInput.onchange = (e) => {{
   vid.onseeked = () => renderCanvasFrame();
 }};
 
-// Ratio Selection
 document.querySelectorAll('.ratio-btn').forEach(btn => {{
   btn.onclick = () => {{
     document.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
@@ -230,7 +290,6 @@ function applyAspectRatio() {{
   renderCanvasFrame();
 }}
 
-// Draggable & Resizable Blur Boxes
 tB1.onchange = () => {{ b1.style.display = tB1.checked ? 'flex' : 'none'; renderCanvasFrame(); }};
 tB2.onchange = () => {{ b2.style.display = tB2.checked ? 'flex' : 'none'; renderCanvasFrame(); }};
 
@@ -303,10 +362,24 @@ function renderCanvasFrame() {{
   }}
 }}
 
-// Extract internal WAV blob in memory
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+// Safe JSON Extractor (Prevents 'Unexpected token <' HTML comment errors!)
+function extractSafeJsonArray(rawText) {{
+  if (!rawText) throw new Error("Empty response from AI");
+  const startIdx = rawText.indexOf('[');
+  const endIdx = rawText.lastIndexOf(']');
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {{
+    throw new Error("Invalid JSON structure returned");
+  }}
+  const cleanJson = rawText.substring(startIdx, endIdx + 1);
+  return JSON.parse(cleanJson);
+}}
+
+// Extract internal 8kHz mono WAV blob (Compact & Fast for both Groq and Gemini Audio)
 async function getInternalAudioBlob(file) {{
   const buf = await file.arrayBuffer();
-  const actx = new (window.AudioContext || window.webkitAudioContext)({{ sampleRate: 16000 }});
+  const actx = new (window.AudioContext || window.webkitAudioContext)({{ sampleRate: 8000 }});
   const decoded = await actx.decodeAudioData(buf);
   const pcm = decoded.getChannelData(0);
   const wav = new ArrayBuffer(44 + pcm.length * 2);
@@ -315,7 +388,7 @@ async function getInternalAudioBlob(file) {{
   str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true);
   str(8, 'WAVEfmt '); v.setUint32(16, 16, true);
   v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 16000, true);
   v.setUint16(32, 2, true); v.setUint16(34, 16, true);
   str(36, 'data'); v.setUint32(40, pcm.length * 2, true);
   for (let i = 0, off = 44; i < pcm.length; i++, off += 2) {{
@@ -325,73 +398,146 @@ async function getInternalAudioBlob(file) {{
   return new Blob([v], {{ type: 'audio/wav' }});
 }}
 
-// Robust Gemini Translator with Model Fallback & Safe Parsing
-async function translateWithGemini(rawSegs) {{
-  const models = ["gemini-2.5-flash", "gemini-1.5-flash"];
-  const promptText = `Translate these video transcript segments into natural, concise spoken Burmese for video dubbing. Return ONLY a valid JSON array of objects with keys: "id", "start", "end", "mm_text". Input: ${{JSON.stringify(rawSegs)}}`;
-
-  let lastErr = "Gemini API Error";
-  for (const m of models) {{
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${{m}}:generateContent?key=${{GEMINI_KEY}}`;
-    const res = await fetch(url, {{
-      method: "POST",
-      headers: {{ "Content-Type": "application/json" }},
-      body: JSON.stringify({{
-        contents: [{{ parts: [{{ text: promptText }}] }}],
-        generationConfig: {{ responseMimeType: "application/json" }}
-      }})
-    }});
-    const data = await res.json();
-
-    if (data.candidates && data.candidates.length > 0 && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts.length > 0) {{
-      let rawText = data.candidates[0].content.parts[0].text.trim();
-      rawText = rawText.replace(/^```json/i, "").replace(/^```/, "").replace(/```$/, "").trim();
-      return JSON.parse(rawText);
-    }} else if (data.error && data.error.message) {{
-      lastErr = data.error.message;
-    }}
-  }}
-  throw new Error(lastErr);
+function blobToBase64(blob) {{
+  return new Promise((resolve) => {{
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.readAsDataURL(blob);
+  }});
 }}
 
-// 2. All-in-One Pipeline (Listen -> Translate -> TTS -> Sync Render)
+// Gemini Models Rotation List (Prioritizing 3.5 & 3.8 as requested, plus active fallbacks)
+const GEMINI_MODELS = [
+  "gemini-3.5-flash",
+  "gemini-3.8-flash",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-1.5-flash"
+];
+
+// Step 1A: Try Groq Whisper across all Groq Keys
+async function tryGroqTranscribe(wavBlob, groqKeys) {{
+  for (let kIdx = 0; kIdx < groqKeys.length; kIdx++) {{
+    const gKey = groqKeys[kIdx];
+    try {{
+      logBox.innerText = `🎧 Groq Whisper (Key #${{kIdx + 1}}) ဖြင့် နားထောင်နေပါသည်...`;
+      const formData = new FormData();
+      formData.append("file", wavBlob, "audio.wav");
+      formData.append("model", "whisper-large-v3-turbo");
+      formData.append("response_format", "verbose_json");
+
+      const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {{
+        method: "POST",
+        headers: {{ "Authorization": `Bearer ${{gKey}}` }},
+        body: formData
+      }});
+      const textResp = await res.text();
+      if (!res.ok || textResp.trim().startsWith("<")) {{
+        throw new Error("Groq Key #" + (kIdx + 1) + " failed");
+      }}
+      const data = JSON.parse(textResp);
+      if (data.segments && data.segments.length > 0) {{
+        return data.segments.map((s, idx) => ({{
+          id: idx, start: Number(s.start.toFixed(2)), end: Number(s.end.toFixed(2)), text: s.text
+        }}));
+      }}
+    }} catch (e) {{
+      console.warn("Groq key failed, rotating...", e);
+    }}
+  }}
+  return null; // Fallback to Gemini Audio Listen!
+}}
+
+// Step 1B + Step 2: Gemini Audio Listen Fallback OR Text Translation with Wait & Retry
+async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
+  let lastError = "Gemini Keys သို့မဟုတ် Models အားလုံး ခေတ္တပြည့်နေပါသည်။";
+
+  for (let attempt = 1; attempt <= 2; attempt++) {{
+    for (let kIdx = 0; kIdx < geminiKeys.length; kIdx++) {{
+      const apiKey = geminiKeys[kIdx];
+      for (const modelName of GEMINI_MODELS) {{
+        try {{
+          logBox.innerText = `🌐 ${{taskLabel}} (Model: ${{modelName}} | Key #${{kIdx + 1}})...`;
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent?key=${{apiKey}}`;
+          const res = await fetch(url, {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{
+              contents: [{{ parts: partsPayload }}],
+              generationConfig: {{ responseMimeType: "application/json" }}
+            }})
+          }});
+
+          const rawBody = await res.text();
+          // Guard against HTML error pages starting with '<'
+          if (rawBody.trim().startsWith("<")) {{
+            throw new Error("HTML response received instead of JSON");
+          }}
+
+          const data = JSON.parse(rawBody);
+          if (res.status === 429) {{
+            logBox.innerText = `⏳ Rate Limit ပြည့်နေသဖြင့် 4 စက္ကန့် စောင့်ပေးနေပါသည် (${{modelName}})...`;
+            await sleep(4000);
+            continue;
+          }}
+
+          if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0]) {{
+            const aiText = data.candidates[0].content.parts[0].text;
+            return extractSafeJsonArray(aiText);
+          }} else if (data.error && data.error.message) {{
+            lastError = data.error.message;
+          }}
+        }} catch (err) {{
+          lastError = err.message;
+        }}
+      }}
+    }}
+    logBox.innerText = `⏳ ဘာသာပြန်ခြင်း ခေတ္တစောင့်ဆိုင်းပြီး ပြန်ကြိုးစားနေပါသည် (Attempt ${{attempt + 1}})...`;
+    await sleep(4500);
+  }}
+  throw new Error(lastError);
+}}
+
+// Main Pipeline Execution
 procBtn.onclick = async () => {{
   if (!selectedFile) {{ alert('Gallery မှ ဗီဒီယို အရင်ရွေးပါ!'); return; }}
-  if (!GROQ_KEY || !GEMINI_KEY) {{ alert('အပေါ်ဆုံးရှိ API Keys (Groq & Gemini) ကို နှိပ်ပြီး Key အရင်ထည့်ပါ!'); return; }}
+
+  const geminiKeys = parseKeyList(gemInput.value);
+  const groqKeys = parseKeyList(groqInput.value);
+
+  if (geminiKeys.length === 0) {{
+    keyDrawer.style.display = 'block';
+    alert('ညာဘက်အပေါ်ထောင့်ရှိ 🔑 API Keys တွင် Gemini API Key အနည်းဆုံး (၁) ခု ထည့်ပြီး သိမ်းပေးပါ!');
+    return;
+  }}
 
   try {{
     procBtn.disabled = true;
     logBox.style.color = "#00e5ff";
-    logBox.innerText = "🎧 ၁/၄ - ဗီဒီယိုထဲမှ အသံကို Whisper ဖြင့် တိုက်ရိုက်နားထောင်နေပါသည်...";
+    logBox.innerText = "🎧 ၁/၃ - ဗီဒီယိုထဲမှ အသံကို ဆွဲထုတ်နေပါသည်...";
     const wavBlob = await getInternalAudioBlob(selectedFile);
 
-    const formData = new FormData();
-    formData.append("file", wavBlob, "audio.wav");
-    formData.append("model", "whisper-large-v3-turbo");
-    formData.append("response_format", "verbose_json");
-
-    const groqRes = await fetch("[https://api.groq.com/openai/v1/audio/transcriptions](https://api.groq.com/openai/v1/audio/transcriptions)", {{
-      method: "POST",
-      headers: {{ "Authorization": `Bearer ${{GROQ_KEY}}` }},
-      body: formData
-    }});
-    const transData = await groqRes.json();
-
-    if (transData.error) {{
-      throw new Error("Groq Error: " + transData.error.message);
-    }}
-    if (!transData.segments || transData.segments.length === 0) {{
-      throw new Error("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ။");
+    let rawSegs = null;
+    if (groqKeys.length > 0) {{
+      rawSegs = await tryGroqTranscribe(wavBlob, groqKeys);
     }}
 
-    const rawSegs = transData.segments.map((s, idx) => ({{
-      id: idx, start: Number(s.start.toFixed(2)), end: Number(s.end.toFixed(2)), text: s.text
-    }}));
+    if (rawSegs && rawSegs.length > 0) {{
+      // Groq succeeded -> Now translate with Gemini
+      const promptText = `Translate these video transcript segments into natural, concise spoken Burmese for video dubbing. Return ONLY a JSON array of objects with keys: "id", "start", "end", "mm_text". Input: ${{JSON.stringify(rawSegs)}}`;
+      subtitles = await runGeminiWithRetry([{{ text: promptText }}], geminiKeys, "၂/၃ - မြန်မာဘာသာပြန်နေသည်");
+    }} else {{
+      // Groq failed or no Groq key -> Gemini listens to audio AND translates directly!
+      logBox.innerText = "🎧 Groq မရသဖြင့် Gemini ဖြင့် တိုက်ရိုက် အသံနားထောင်ပြီး ဘာသာပြန်နေပါသည်...";
+      const b64Audio = await blobToBase64(wavBlob);
+      const audioPrompt = `Listen carefully to this audio and transcribe + translate the spoken sentences directly into natural, concise spoken Burmese for video dubbing with accurate timestamps in seconds. Return ONLY a valid JSON array of objects with keys: "id" (number), "start" (number in seconds), "end" (number in seconds), "mm_text" (Burmese string).`;
+      subtitles = await runGeminiWithRetry([
+        {{ inlineData: {{ mimeType: "audio/wav", data: b64Audio }} }},
+        {{ text: audioPrompt }}
+      ], geminiKeys, "၂/၃ - Gemini ဖြင့် နားထောင်+ဘာသာပြန်နေသည်");
+    }}
 
-    logBox.innerText = "🌐 ၂/၄ - Gemini ဖြင့် အချိန်ကိုက် မြန်မာဘာသာပြန်နေပါသည်...";
-    subtitles = await translateWithGemini(rawSegs);
-
-    logBox.innerText = "🎬 ၃/၄ - ဗီဒီယို၊ Blur၊ စာတန်းထိုးနှင့် အသံကို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
+    logBox.innerText = "🎬 ၃/၃ - ဗီဒီယို၊ Blur၊ စာတန်းထိုးနှင့် အသံကို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
 
@@ -424,7 +570,6 @@ procBtn.onclick = async () => {{
     }};
 
     let spokenIds = new Set();
-    // Convert -100% ~ +100% slider into rate multiplier (e.g., 0% -> 1.0, +50% -> 1.5, -50% -> 0.5)
     const speedPct = parseInt(spdSlider.value, 10);
     const baseRate = Math.max(0.25, 1.0 + (speedPct / 100.0));
     const pitchHz = parseInt(pitSlider.value, 10);
@@ -470,4 +615,4 @@ procBtn.onclick = async () => {{
 </html>
 """
 
-components.html(studio99_app, height=860, scrolling=True)
+components.html(studio99_app, height=900, scrolling=True)
