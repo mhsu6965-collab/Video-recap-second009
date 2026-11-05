@@ -3,16 +3,14 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Studio99", layout="centered")
 
-# Hide default Streamlit margins for full mobile app feel
 st.markdown("""
 <style>
     .stApp { background-color: #0e121a; color: #ffffff; }
-    .block-container { padding-top: 0.5rem; padding-bottom: 1rem; max-width: 450px; }
+    .block-container { padding-top: 0.4rem; padding-bottom: 1rem; max-width: 450px; }
     header, footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# Optional: Load keys from Streamlit Cloud Secrets if configured
 secret_groq = ""
 secret_gemini = ""
 try:
@@ -45,7 +43,7 @@ studio99_app = f"""
     border: 1px solid #00e5ff; border-radius: 12px; padding: 12px;
   }}
   textarea {{
-    width: 95%; height: 55px; background: #0b0e14; color: #00e5ff;
+    width: 95%; height: 52px; background: #0b0e14; color: #00e5ff;
     border: 1px solid #2e384d; border-radius: 8px; padding: 6px;
     font-size: 11px; font-family: monospace; margin-bottom: 8px;
   }}
@@ -61,20 +59,29 @@ studio99_app = f"""
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
   }}
   #preview-container {{
-    position: relative; width: 96%; height: 280px; margin: 0 auto 14px auto;
+    position: relative; width: 96%; height: 300px; margin: 0 auto 14px auto;
     background: #1b222f; border-radius: 14px; border: 1px solid #2a3346;
     overflow: hidden; display: flex; align-items: center; justify-content: center;
   }}
   canvas {{ width: 100%; height: 100%; object-fit: contain; display: none; }}
   #placeholder {{ color: #687387; text-align: center; font-size: 14px; line-height: 1.8; }}
-  .blur-overlay {{
+  .drag-overlay {{
     position: absolute; border-radius: 6px; touch-action: none;
     display: none; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: bold; backdrop-filter: blur(8px);
-    background: rgba(255,255,255,0.12);
+    font-size: 11px; font-weight: bold; text-align: center;
   }}
-  #blur1 {{ border: 2px dashed #00e5ff; color: #00e5ff; width: 72%; height: 16%; top: 75%; left: 14%; }}
-  #blur2 {{ border: 2px dashed #d500f9; color: #d500f9; width: 35%; height: 14%; top: 8%; left: 8%; }}
+  #blur1 {{
+    border: 2px dashed #00e5ff; color: #00e5ff; backdrop-filter: blur(8px);
+    background: rgba(0, 229, 255, 0.12); width: 72%; height: 14%; top: 72%; left: 14%;
+  }}
+  #blur2 {{
+    border: 2px dashed #d500f9; color: #d500f9; backdrop-filter: blur(8px);
+    background: rgba(213, 0, 249, 0.12); width: 35%; height: 13%; top: 6%; left: 6%;
+  }}
+  #sub-box {{
+    display: flex; border: 2px dashed #ffea00; color: #ffea00;
+    background: rgba(0, 0, 0, 0.45); width: 84%; height: 14%; top: 82%; left: 8%;
+  }}
   .resize-dot {{
     width: 18px; height: 18px; position: absolute; right: -2px; bottom: -2px;
     background: currentColor; border-top-left-radius: 6px;
@@ -119,15 +126,14 @@ studio99_app = f"""
   <button class="key-btn" id="open-key-btn">🔑 API Keys (အသေသိမ်းရန်)</button>
 </div>
 
-<!-- Persistent Multi-Key Drawer (Saved in Phone Browser localStorage) -->
 <div id="key-drawer">
   <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">
-    📌 <b>Gemini Keys (၂ ခု ၃ ခု ထည့်နိုင်သည်):</b> တစ်ကြောင်းလျှင် Key တစ်ခုနှုန်း (သို့) ကော်မာခံပြီး ထည့်ပါ။ တစ်ခါသိမ်းထားရုံဖြင့် အမြဲမှတ်ထားပါမည်။
+    📌 <b>Gemini Keys (၂ ခု ၃ ခု ထည့်နိုင်သည်):</b> တစ်ကြောင်းလျှင် တစ်ခုနှုန်းထည့်ပါ။
   </div>
   <textarea id="gemini-keys-input" placeholder="AIzaSy...&#10;AIzaSy..."></textarea>
 
   <div style="font-size:12px; color:#94a3b8; margin-bottom:4px;">
-    📌 <b>Groq Keys (၂ ခု ၃ ခု ထည့်နိုင်သည်):</b> မထည့်ထားလျှင်လည်း Gemini က တိုက်ရိုက်နားထောင်ပေးပါမည်။
+    📌 <b>Groq Keys (၂ ခု ၃ ခု ထည့်နိုင်သည်):</b> မထည့်ထားလျှင် Gemini က တိုက်ရိုက်နားထောင်ပေးပါမည်။
   </div>
   <textarea id="groq-keys-input" placeholder="gsk_...&#10;gsk_..."></textarea>
 
@@ -140,29 +146,31 @@ studio99_app = f"""
   <input type="file" id="video-input" accept="video/*" style="display:none">
 </label>
 
-<!-- 2. Instant Video Preview + Draggable Blur Stage -->
+<!-- 2. Instant Video Preview + Draggable Blur 1, Blur 2 & Subtitle Box -->
 <div id="preview-container">
   <div id="placeholder">▶️<br>Preview မြင်ရရန် ဗီဒီယိုရွေးပါ</div>
   <canvas id="stage-canvas"></canvas>
-  <div id="blur1" class="blur-overlay">Blur 1<div class="resize-dot" id="dot1"></div></div>
-  <div id="blur2" class="blur-overlay">Blur 2<div class="resize-dot" id="dot2"></div></div>
+  <div id="blur1" class="drag-overlay">Blur 1<div class="resize-dot" id="dot1"></div></div>
+  <div id="blur2" class="drag-overlay">Blur 2<div class="resize-dot" id="dot2"></div></div>
+  <div id="sub-box" class="drag-overlay">📝 မြန်မာစာတန်းထိုး နေရာ<div class="resize-dot" id="dot-sub"></div></div>
 </div>
 
+<!-- Original video is strictly muted when rendering -->
 <video id="src-video" playsinline crossorigin="anonymous" style="display:none"></video>
 
-<!-- 3. Blur Mask Card -->
+<!-- 3. Blur & Subtitle Position Card -->
 <div class="card">
-  <div class="card-title">⠿ Blur Mask (ဗီဒီယိုပေါ်တွင် လက်ဖြင့်ဆွဲရွှေ့ပါ)</div>
+  <div class="card-title">⠿ Blur & စာတန်းထိုး နေရာ (ဗီဒီယိုပေါ်တွင် လက်ဖြင့်ဆွဲရွှေ့ပါ)</div>
   <div class="toggle-row">
-    <span style="color:#00e5ff; font-weight:bold;">Blur 1</span>
+    <span style="color:#00e5ff; font-weight:bold;">Blur 1 (အပြာကွက်)</span>
     <input type="checkbox" id="toggle-b1" style="transform:scale(1.4);">
   </div>
   <div class="toggle-row">
-    <span style="color:#d500f9; font-weight:bold;">Blur 2</span>
+    <span style="color:#d500f9; font-weight:bold;">Blur 2 (ခရမ်းကွက်)</span>
     <input type="checkbox" id="toggle-b2" style="transform:scale(1.4);">
   </div>
   <div class="toggle-row">
-    <span style="color:#fff; font-weight:bold;">မြန်မာစာတန်းထိုး (Subtitles)</span>
+    <span style="color:#ffea00; font-weight:bold;">📝 မြန်မာစာတန်းထိုး အကွက် (အဝါကွက်)</span>
     <input type="checkbox" id="toggle-sub" checked style="transform:scale(1.4);">
   </div>
 </div>
@@ -178,18 +186,18 @@ studio99_app = f"""
   </div>
 </div>
 
-<!-- 5. TTS Speed (+100% / -100%) & Pitch Card -->
+<!-- 5. Edge-TTS Speed (+100% / -100%) & Pitch Card -->
 <div class="card">
-  <div class="card-title">🎙️ Edge-TTS & Sync Settings</div>
+  <div class="card-title">🎙️ Microsoft Edge-TTS & Sync Settings</div>
   <div class="toggle-row">
     <span>အသံ (Voice)</span>
     <select id="voice-sel" style="background:#0e121a; color:#fff; border:1px solid #2e384d; padding:6px; border-radius:6px;">
-      <option value="my-MM-ThihaNeural">သီဟ (Male)</option>
-      <option value="my-MM-NilarNeural">နီလာ (Female)</option>
+      <option value="my-MM-ThihaNeural">သီဟ - Male (Edge-TTS)</option>
+      <option value="my-MM-NilarNeural">နီလာ - Female (Edge-TTS)</option>
     </select>
   </div>
-  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">0%</span></div>
-  <input type="range" id="spd-slider" min="-100" max="100" step="5" value="0">
+  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">+10%</span></div>
+  <input type="range" id="spd-slider" min="-100" max="100" step="5" value="10">
   
   <div class="slider-row"><span>Pitch (အသံအနိမ့်အမြင့်)</span><span id="pit-val">0 Hz</span></div>
   <input type="range" id="pit-slider" min="-50" max="50" step="5" value="0">
@@ -197,7 +205,7 @@ studio99_app = f"""
 
 <div id="log-box">ဗီဒီယိုရွေးပြီးပါက အောက်ပါခလုတ်ကို နှိပ်ပါ။</div>
 
-<button class="main-btn" id="process-btn">🚀 နားထောင်မည် + ဘာသာပြန် + ရုပ်/သံကိုက် ထုတ်မည်</button>
+<button class="main-btn" id="process-btn">🚀 နားထောင်မည် + ဘာသာပြန် + TTS ရုပ်/သံကိုက် ထုတ်မည်</button>
 
 <script>
 const DEFAULT_GROQ = `{secret_groq}`;
@@ -209,7 +217,6 @@ const saveKeysBtn = document.getElementById('save-keys-btn');
 const gemInput = document.getElementById('gemini-keys-input');
 const groqInput = document.getElementById('groq-keys-input');
 
-// Load saved keys from phone localStorage on startup
 gemInput.value = localStorage.getItem('s99_gemini_keys') || DEFAULT_GEMINI;
 groqInput.value = localStorage.getItem('s99_groq_keys') || DEFAULT_GROQ;
 
@@ -236,6 +243,7 @@ const container = document.getElementById('preview-container');
 const placeholder = document.getElementById('placeholder');
 const b1 = document.getElementById('blur1');
 const b2 = document.getElementById('blur2');
+const subBox = document.getElementById('sub-box');
 const tB1 = document.getElementById('toggle-b1');
 const tB2 = document.getElementById('toggle-b2');
 const tSub = document.getElementById('toggle-sub');
@@ -268,7 +276,7 @@ vidInput.onchange = (e) => {{
     applyAspectRatio();
     vid.currentTime = 0.2;
     logBox.style.color = "#00e5ff";
-    logBox.innerText = "✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ (Offline Loaded)";
+    logBox.innerText = "✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ! စာတန်းထိုးအကွက် (အဝါ) နှင့် Blur များကို စိတ်ကြိုက်ရွှေ့နိုင်ပါသည်။";
   }};
   vid.onseeked = () => renderCanvasFrame();
 }};
@@ -292,6 +300,7 @@ function applyAspectRatio() {{
 
 tB1.onchange = () => {{ b1.style.display = tB1.checked ? 'flex' : 'none'; renderCanvasFrame(); }};
 tB2.onchange = () => {{ b2.style.display = tB2.checked ? 'flex' : 'none'; renderCanvasFrame(); }};
+tSub.onchange = () => {{ subBox.style.display = tSub.checked ? 'flex' : 'none'; renderCanvasFrame(); }};
 
 function enableTouchDrag(box, dot) {{
   let sx, sy, sl, st, sw, sh, mode = null;
@@ -309,28 +318,76 @@ function enableTouchDrag(box, dot) {{
       box.style.left = Math.max(0, Math.min(container.clientWidth - box.offsetWidth, sl + dx)) / container.clientWidth * 100 + '%';
       box.style.top = Math.max(0, Math.min(container.clientHeight - box.offsetHeight, st + dy)) / container.clientHeight * 100 + '%';
     }} else {{
-      box.style.width = Math.max(30, Math.min(container.clientWidth - sl, sw + dx)) / container.clientWidth * 100 + '%';
-      box.style.height = Math.max(20, Math.min(container.clientHeight - st, sh + dy)) / container.clientHeight * 100 + '%';
+      box.style.width = Math.max(35, Math.min(container.clientWidth - sl, sw + dx)) / container.clientWidth * 100 + '%';
+      box.style.height = Math.max(22, Math.min(container.clientHeight - st, sh + dy)) / container.clientHeight * 100 + '%';
     }}
     renderCanvasFrame();
   }};
   box.onpointerup = (e) => {{ mode = null; box.releasePointerCapture(e.pointerId); }};
 }}
+
 enableTouchDrag(b1, document.getElementById('dot1'));
 enableTouchDrag(b2, document.getElementById('dot2'));
+enableTouchDrag(subBox, document.getElementById('dot-sub'));
 
-function applyBlurRect(el) {{
-  const rx = (parseFloat(el.style.left || 14) / 100) * canvas.width;
-  const ry = (parseFloat(el.style.top || 75) / 100) * canvas.height;
-  const rw = (parseFloat(el.style.width || 72) / 100) * canvas.width;
-  const rh = (parseFloat(el.style.height || 16) / 100) * canvas.height;
+function getBoxMetrics(el, defL, defT, defW, defH) {{
+  return {{
+    rx: (parseFloat(el.style.left || defL) / 100) * canvas.width,
+    ry: (parseFloat(el.style.top || defT) / 100) * canvas.height,
+    rw: (parseFloat(el.style.width || defW) / 100) * canvas.width,
+    rh: (parseFloat(el.style.height || defH) / 100) * canvas.height
+  }};
+}}
+
+function applyBlurRect(el, defL, defT, defW, defH) {{
+  const m = getBoxMetrics(el, defL, defT, defW, defH);
   ctx.save();
   ctx.filter = 'blur(14px)';
-  ctx.drawImage(canvas, rx, ry, rw, rh, rx, ry, rw, rh);
+  ctx.drawImage(canvas, m.rx, m.ry, m.rw, m.rh, m.rx, m.ry, m.rw, m.rh);
   ctx.restore();
 }}
 
-function renderCanvasFrame() {{
+// Word-wrap helper so Burmese text fits neatly inside the draggable subtitle box
+function drawWrappedSubtitles(text, x, y, maxWidth, fontSize) {{
+  ctx.font = `bold ${{fontSize}}px "Noto Sans Myanmar", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.22));
+  ctx.strokeStyle = '#000000';
+  ctx.fillStyle = '#ffffff';
+
+  const words = text.split(' ');
+  let lines = [];
+  let currentLine = words[0] || '';
+
+  for (let i = 1; i < words.length; i++) {{
+    const testLine = currentLine + ' ' + words[i];
+    if (ctx.measureText(testLine).width < maxWidth) {{
+      currentLine = testLine;
+    }} else {{
+      lines.push(currentLine);
+      currentLine = words[i];
+    }}
+  }}
+  lines.push(currentLine);
+
+  // If a single continuous Burmese string has no spaces and exceeds width, split in half
+  if (lines.length === 1 && ctx.measureText(lines[0]).width > maxWidth && text.length > 20) {{
+    const mid = Math.floor(text.length / 2);
+    lines = [text.slice(0, mid), text.slice(mid)];
+  }}
+
+  const lineHeight = fontSize * 1.35;
+  const startY = y - ((lines.length - 1) * lineHeight) / 2;
+
+  lines.forEach((ln, idx) => {{
+    const ly = startY + idx * lineHeight;
+    ctx.strokeText(ln, x, ly);
+    ctx.fillText(ln, x, ly);
+  }});
+}}
+
+function renderCanvasFrame(activeSubText = null) {{
   if (!vid.videoWidth) return;
   ctx.fillStyle = '#0b0e14';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -342,29 +399,28 @@ function renderCanvasFrame() {{
   else {{ dw = canvas.height * vr; dx = (canvas.width - dw) / 2; }}
   ctx.drawImage(vid, dx, dy, dw, dh);
 
-  if (tB1.checked) applyBlurRect(b1);
-  if (tB2.checked) applyBlurRect(b2);
+  if (tB1.checked) applyBlurRect(b1, 14, 72, 72, 14);
+  if (tB2.checked) applyBlurRect(b2, 6, 6, 35, 13);
 
-  if (tSub.checked && subtitles.length > 0) {{
-    const cur = vid.currentTime;
-    const line = subtitles.find(s => cur >= s.start && cur <= s.end);
-    if (line && line.mm_text) {{
-      const fSize = Math.round(canvas.width * 0.044);
-      ctx.font = `bold ${{fSize}}px "Noto Sans Myanmar", sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.lineWidth = 5;
-      ctx.strokeStyle = '#000000';
-      ctx.fillStyle = '#ffffff';
-      const yPos = canvas.height * 0.86;
-      ctx.strokeText(line.mm_text, canvas.width / 2, yPos);
-      ctx.fillText(line.mm_text, canvas.width / 2, yPos);
+  if (tSub.checked) {{
+    let textToDraw = activeSubText;
+    if (!textToDraw && subtitles.length > 0) {{
+      const cur = vid.currentTime;
+      const found = subtitles.find(s => cur >= s.start && cur <= s.end);
+      if (found) textToDraw = found.mm_text;
+    }}
+    if (textToDraw) {{
+      const sm = getBoxMetrics(subBox, 8, 82, 84, 14);
+      const centerX = sm.rx + (sm.rw / 2);
+      const centerY = sm.ry + (sm.rh / 2);
+      const dynamicFontSize = Math.max(16, Math.min(42, Math.round(sm.rh * 0.34)));
+      drawWrappedSubtitles(textToDraw, centerX, centerY, sm.rw * 0.95, dynamicFontSize);
     }}
   }}
 }}
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
-// Safe JSON Extractor (Prevents 'Unexpected token <' HTML comment errors!)
 function extractSafeJsonArray(rawText) {{
   if (!rawText) throw new Error("Empty response from AI");
   const startIdx = rawText.indexOf('[');
@@ -372,11 +428,9 @@ function extractSafeJsonArray(rawText) {{
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {{
     throw new Error("Invalid JSON structure returned");
   }}
-  const cleanJson = rawText.substring(startIdx, endIdx + 1);
-  return JSON.parse(cleanJson);
+  return JSON.parse(rawText.substring(startIdx, endIdx + 1));
 }}
 
-// Extract internal 8kHz mono WAV blob (Compact & Fast for both Groq and Gemini Audio)
 async function getInternalAudioBlob(file) {{
   const buf = await file.arrayBuffer();
   const actx = new (window.AudioContext || window.webkitAudioContext)({{ sampleRate: 8000 }});
@@ -406,7 +460,6 @@ function blobToBase64(blob) {{
   }});
 }}
 
-// Gemini Models Rotation List (Prioritizing 3.5 & 3.8 as requested, plus active fallbacks)
 const GEMINI_MODELS = [
   "gemini-3.5-flash",
   "gemini-3.8-flash",
@@ -415,7 +468,6 @@ const GEMINI_MODELS = [
   "gemini-1.5-flash"
 ];
 
-// Step 1A: Try Groq Whisper across all Groq Keys
 async function tryGroqTranscribe(wavBlob, groqKeys) {{
   for (let kIdx = 0; kIdx < groqKeys.length; kIdx++) {{
     const gKey = groqKeys[kIdx];
@@ -432,9 +484,7 @@ async function tryGroqTranscribe(wavBlob, groqKeys) {{
         body: formData
       }});
       const textResp = await res.text();
-      if (!res.ok || textResp.trim().startsWith("<")) {{
-        throw new Error("Groq Key #" + (kIdx + 1) + " failed");
-      }}
+      if (!res.ok || textResp.trim().startsWith("<")) throw new Error("Groq failed");
       const data = JSON.parse(textResp);
       if (data.segments && data.segments.length > 0) {{
         return data.segments.map((s, idx) => ({{
@@ -445,10 +495,9 @@ async function tryGroqTranscribe(wavBlob, groqKeys) {{
       console.warn("Groq key failed, rotating...", e);
     }}
   }}
-  return null; // Fallback to Gemini Audio Listen!
+  return null;
 }}
 
-// Step 1B + Step 2: Gemini Audio Listen Fallback OR Text Translation with Wait & Retry
 async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
   let lastError = "Gemini Keys သို့မဟုတ် Models အားလုံး ခေတ္တပြည့်နေပါသည်။";
 
@@ -457,7 +506,7 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
       const apiKey = geminiKeys[kIdx];
       for (const modelName of GEMINI_MODELS) {{
         try {{
-          logBox.innerText = `🌐 ${{taskLabel}} (Model: ${{modelName}} | Key #${{kIdx + 1}})...`;
+          logBox.innerText = `🌐 ${{taskLabel}} (${{modelName}} | Key #${{kIdx + 1}})...`;
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent?key=${{apiKey}}`;
           const res = await fetch(url, {{
             method: "POST",
@@ -469,10 +518,7 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
           }});
 
           const rawBody = await res.text();
-          // Guard against HTML error pages starting with '<'
-          if (rawBody.trim().startsWith("<")) {{
-            throw new Error("HTML response received instead of JSON");
-          }}
+          if (rawBody.trim().startsWith("<")) throw new Error("HTML error page");
 
           const data = JSON.parse(rawBody);
           if (res.status === 429) {{
@@ -482,8 +528,7 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
           }}
 
           if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0]) {{
-            const aiText = data.candidates[0].content.parts[0].text;
-            return extractSafeJsonArray(aiText);
+            return extractSafeJsonArray(data.candidates[0].content.parts[0].text);
           }} else if (data.error && data.error.message) {{
             lastError = data.error.message;
           }}
@@ -492,13 +537,107 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
         }}
       }}
     }}
-    logBox.innerText = `⏳ ဘာသာပြန်ခြင်း ခေတ္တစောင့်ဆိုင်းပြီး ပြန်ကြိုးစားနေပါသည် (Attempt ${{attempt + 1}})...`;
-    await sleep(4500);
+    logBox.innerText = `⏳ ခေတ္တစောင့်ဆိုင်းပြီး ပြန်ကြိုးစားနေပါသည် (Attempt ${{attempt + 1}})...`;
+    await sleep(4000);
   }}
   throw new Error(lastError);
 }}
 
-// Main Pipeline Execution
+// --- REAL MICROSOFT EDGE NEURAL TTS ENGINE (WebSocket MP3 Generator) ---
+function escapeXml(unsafe) {{
+  return unsafe.replace(/[<>&'"]/g, c => {{
+    switch (c) {{
+      case '<': return '&lt;'; case '>': return '&gt;';
+      case '&': return '&amp;'; case '\\'': return '&apos;'; case '"': return '&quot;';
+    }}
+  }});
+}}
+
+function fetchEdgeTTSMp3(text, voice, ratePct, pitchHz) {{
+  return new Promise((resolve, reject) => {{
+    const reqId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId=${{reqId}}`;
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = "arraybuffer";
+    const audioChunks = [];
+
+    const timer = setTimeout(() => {{
+      ws.close();
+      reject(new Error("Edge-TTS timeout"));
+    }}, 12000);
+
+    ws.onopen = () => {{
+      const configMsg = `Content-Type:application/json; charset=utf-8\\r\\nPath:speech.config\\r\\n\\r\\n{{"context":{{"synthesis":{{"audio":{{"metadataoptions":{{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"}},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}}}}}`;
+      ws.send(configMsg);
+
+      const rateStr = (ratePct >= 0 ? '+' : '') + ratePct + '%';
+      const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
+      const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'><voice name='${{voice}}'><prosody pitch='${{pitchStr}}' rate='${{rateStr}}' volume='+0%'>${{escapeXml(text)}}</prosody></voice></speak>`;
+      const ssmlMsg = `X-RequestId:${{reqId}}\\r\\nContent-Type:application/ssml+xml\\r\\nPath:ssml\\r\\n\\r\\n${{ssml}}`;
+      ws.send(ssmlMsg);
+    }};
+
+    ws.onmessage = (event) => {{
+      if (typeof event.data === "string") {{
+        if (event.data.includes("Path:turn.end")) {{
+          clearTimeout(timer);
+          ws.close();
+          const mp3Blob = new Blob(audioChunks, {{ type: "audio/mp3" }});
+          resolve(mp3Blob);
+        }}
+      }} else if (event.data instanceof ArrayBuffer) {{
+        const view = new DataView(event.data);
+        const headerLen = view.getUint16(0);
+        if (event.data.byteLength > headerLen + 2) {{
+          const mp3Slice = event.data.slice(headerLen + 2);
+          audioChunks.push(mp3Slice);
+        }}
+      }}
+    }};
+
+    ws.onerror = (err) => {{
+      clearTimeout(timer);
+      reject(err);
+    }};
+  }});
+}}
+
+// Fallback: Gemini Native Audio TTS if Edge-TTS WebSocket is blocked by network/VPN
+async function fetchGeminiTTSAudio(text, apiKey) {{
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${{apiKey}}`;
+  const res = await fetch(url, {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{
+      contents: [{{ parts: [{{ text: "Read this Burmese text clearly: " + text }}] }}],
+      generationConfig: {{
+        responseModalities: ["AUDIO"],
+        speechConfig: {{ voiceConfig: {{ prebuiltVoiceConfig: {{ voiceName: "Aoede" }} }} }}
+      }}
+    }})
+  }});
+  const data = await res.json();
+  const b64 = data.candidates[0].content.parts[0].inlineData.data;
+  const bin = atob(b64);
+  const pcmBytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) pcmBytes[i] = bin.charCodeAt(i);
+
+  // Wrap 24kHz 16-bit Mono PCM into WAV Blob
+  const wavBuf = new ArrayBuffer(44 + pcmBytes.length);
+  const v = new DataView(wavBuf);
+  const str = (o, s) => {{ for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }};
+  str(0, 'RIFF'); v.setUint32(4, 36 + pcmBytes.length, true);
+  str(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 24000, true); v.setUint32(28, 48000, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, pcmBytes.length, true);
+  new Uint8Array(wavBuf, 44).set(pcmBytes);
+  return new Blob([wavBuf], {{ type: 'audio/wav' }});
+}}
+
+// --- MAIN EXECUTION PIPELINE ---
 procBtn.onclick = async () => {{
   if (!selectedFile) {{ alert('Gallery မှ ဗီဒီယို အရင်ရွေးပါ!'); return; }}
 
@@ -507,14 +646,14 @@ procBtn.onclick = async () => {{
 
   if (geminiKeys.length === 0) {{
     keyDrawer.style.display = 'block';
-    alert('ညာဘက်အပေါ်ထောင့်ရှိ 🔑 API Keys တွင် Gemini API Key အနည်းဆုံး (၁) ခု ထည့်ပြီး သိမ်းပေးပါ!');
+    alert('ညာဘက်အပေါ်ထောင့်ရှိ 🔑 API Keys တွင် Gemini API Key အရင်ထည့်ပေးပါ!');
     return;
   }}
 
   try {{
     procBtn.disabled = true;
     logBox.style.color = "#00e5ff";
-    logBox.innerText = "🎧 ၁/၃ - ဗီဒီယိုထဲမှ အသံကို ဆွဲထုတ်နေပါသည်...";
+    logBox.innerText = "🎧 ၁/၄ - ဗီဒီယိုထဲမှ အသံကို ဆွဲထုတ်နေပါသည်...";
     const wavBlob = await getInternalAudioBlob(selectedFile);
 
     let rawSegs = null;
@@ -523,88 +662,145 @@ procBtn.onclick = async () => {{
     }}
 
     if (rawSegs && rawSegs.length > 0) {{
-      // Groq succeeded -> Now translate with Gemini
-      const promptText = `Translate these video transcript segments into natural, concise spoken Burmese for video dubbing. Return ONLY a JSON array of objects with keys: "id", "start", "end", "mm_text". Input: ${{JSON.stringify(rawSegs)}}`;
-      subtitles = await runGeminiWithRetry([{{ text: promptText }}], geminiKeys, "၂/၃ - မြန်မာဘာသာပြန်နေသည်");
+      const promptText = `Translate these video transcript segments into natural, concise spoken Burmese for video dubbing. Keep each Burmese sentence brief so it matches the speaking duration. Return ONLY a JSON array of objects with keys: "id", "start", "end", "mm_text". Input: ${{JSON.stringify(rawSegs)}}`;
+      subtitles = await runGeminiWithRetry([{{ text: promptText }}], geminiKeys, "၂/၄ - မြန်မာဘာသာပြန်နေသည်");
     }} else {{
-      // Groq failed or no Groq key -> Gemini listens to audio AND translates directly!
-      logBox.innerText = "🎧 Groq မရသဖြင့် Gemini ဖြင့် တိုက်ရိုက် အသံနားထောင်ပြီး ဘာသာပြန်နေပါသည်...";
+      logBox.innerText = "🎧 Groq မရသဖြင့် Gemini ဖြင့် တိုက်ရိုက်နားထောင်ပြီး ဘာသာပြန်နေပါသည်...";
       const b64Audio = await blobToBase64(wavBlob);
-      const audioPrompt = `Listen carefully to this audio and transcribe + translate the spoken sentences directly into natural, concise spoken Burmese for video dubbing with accurate timestamps in seconds. Return ONLY a valid JSON array of objects with keys: "id" (number), "start" (number in seconds), "end" (number in seconds), "mm_text" (Burmese string).`;
+      const audioPrompt = `Listen to this audio and translate the speech into concise spoken Burmese segments for dubbing with accurate timestamps in seconds. Return ONLY a valid JSON array of objects with keys: "id" (number), "start" (number in seconds), "end" (number in seconds), "mm_text" (Burmese string).`;
       subtitles = await runGeminiWithRetry([
         {{ inlineData: {{ mimeType: "audio/wav", data: b64Audio }} }},
         {{ text: audioPrompt }}
-      ], geminiKeys, "၂/၃ - Gemini ဖြင့် နားထောင်+ဘာသာပြန်နေသည်");
+      ], geminiKeys, "၂/၄ - Gemini နားထောင်+ဘာသာပြန်နေသည်");
     }}
 
-    logBox.innerText = "🎬 ၃/၃ - ဗီဒီယို၊ Blur၊ စာတန်းထိုးနှင့် အသံကို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
+    // Step 3: Generate Real Edge-TTS Audio Buffers for every translated segment
+    const voiceName = document.getElementById('voice-sel').value;
+    const ratePct = parseInt(spdSlider.value, 10);
+    const pitchHz = parseInt(pitSlider.value, 10);
+
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
 
-    if (!vid.audioConnected) {{
-      const vidSource = audioCtx.createMediaElementSource(vid);
-      const bgGain = audioCtx.createGain();
-      bgGain.gain.value = 0.1;
-      vidSource.connect(bgGain).connect(dest);
-      vid.audioConnected = true;
+    const ttsBuffers = [];
+    for (let i = 0; i < subtitles.length; i++) {{
+      const seg = subtitles[i];
+      if (!seg.mm_text || !seg.mm_text.trim()) continue;
+      logBox.innerText = `🎙️ ၃/၄ - Edge-TTS မြန်မာအသံ ထုတ်လုပ်နေသည် (${{i + 1}}/${{subtitles.length}})...`;
+
+      let audioBlob = null;
+      try {{
+        audioBlob = await fetchEdgeTTSMp3(seg.mm_text.trim(), voiceName, ratePct, pitchHz);
+      }} catch (edgeErr) {{
+        console.warn("Edge-TTS fallback to Gemini Audio:", edgeErr);
+        audioBlob = await fetchGeminiTTSAudio(seg.mm_text.trim(), geminiKeys[0]);
+      }}
+
+      const arrBuf = await audioBlob.arrayBuffer();
+      const decodedBuf = await audioCtx.decodeAudioData(arrBuf);
+      ttsBuffers.push({{
+        id: seg.id,
+        start: Number(seg.start),
+        end: Number(seg.end),
+        mm_text: seg.mm_text,
+        buffer: decodedBuf,
+        played: false
+      }});
     }}
 
+    // Step 4: Mute original video completely & Sync TTS with Video Frame-by-Frame
+    logBox.innerText = "🎬 ၄/၄ - မူရင်းအသံဖျောက်ပြီး TTS အသံနှင့် ဗီဒီယို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
+    vid.muted = true; // 100% Mute Original Video Audio!
+    vid.volume = 0;
+
+    // Hide dashed guide boxes during final render
+    b1.style.opacity = '0';
+    b2.style.opacity = '0';
+    subBox.style.opacity = '0';
+
     const canvasStream = canvas.captureStream(24);
-    const finalStream = new MediaStream([
+    const combinedStream = new MediaStream([
       ...canvasStream.getVideoTracks(),
       ...dest.stream.getAudioTracks()
     ]);
 
-    const recorder = new MediaRecorder(finalStream, {{ mimeType: 'video/webm' }});
+    const recorder = new MediaRecorder(combinedStream, {{ mimeType: 'video/webm' }});
     const chunks = [];
     recorder.ondataavailable = e => chunks.push(e.data);
     recorder.onstop = () => {{
+      b1.style.opacity = '1';
+      b2.style.opacity = '1';
+      subBox.style.opacity = '1';
+      vid.playbackRate = 1.0;
+
       const finalBlob = new Blob(chunks, {{ type: 'video/webm' }});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(finalBlob);
-      a.download = 'Studio99_Dubbed_Video.webm';
+      a.download = 'Studio99_Synced_Dub.webm';
       a.click();
       logBox.style.color = "#00e676";
-      logBox.innerText = "🎉 ရုပ်နှင့်အသံ အချိန်ကိုက် ဗီဒီယို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!";
+      logBox.innerText = "🎉 မူရင်းအသံဖျောက် + မြန်မာ TTS ရုပ်/သံကိုက် ဗီဒီယို ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!";
       procBtn.disabled = false;
     }};
 
-    let spokenIds = new Set();
-    const speedPct = parseInt(spdSlider.value, 10);
-    const baseRate = Math.max(0.25, 1.0 + (speedPct / 100.0));
-    const pitchHz = parseInt(pitSlider.value, 10);
-    const basePitch = Math.max(0.5, Math.min(2.0, 1.0 + (pitchHz / 100.0)));
-
     vid.currentTime = 0;
+    await audioCtx.resume();
     recorder.start();
-    vid.play();
+    await vid.play();
 
-    function syncLoop() {{
+    let activeSegText = null;
+
+    function syncRenderLoop() {{
       if (!vid.paused && !vid.ended) {{
-        renderCanvasFrame();
         const now = vid.currentTime;
-        subtitles.forEach(seg => {{
-          if (now >= seg.start && now <= seg.end && !spokenIds.has(seg.id)) {{
-            spokenIds.add(seg.id);
-            const utter = new SpeechSynthesisUtterance(seg.mm_text);
-            utter.lang = 'my-MM';
-            utter.pitch = basePitch;
-            const slotDuration = Math.max(1, seg.end - seg.start);
-            const estDuration = seg.mm_text.length * 0.11;
-            utter.rate = Math.min(2.0, Math.max(baseRate, estDuration / slotDuration));
-            window.speechSynthesis.speak(utter);
+        const currentSeg = ttsBuffers.find(s => now >= s.start && now <= s.end);
+        activeSegText = currentSeg ? currentSeg.mm_text : null;
+
+        ttsBuffers.forEach(item => {{
+          if (!item.played && now >= item.start) {{
+            item.played = true;
+            const slotDur = Math.max(0.4, item.end - item.start);
+            const ttsDur = item.buffer.duration;
+
+            const srcNode = audioCtx.createBufferSource();
+            srcNode.buffer = item.buffer;
+
+            // Precision Audio-Video Sync:
+            // If TTS is longer than video slot, slightly speed up TTS (up to 1.35x) AND slow down video proportionally so they finish together!
+            let audioSpeed = 1.0;
+            if (ttsDur > slotDur) {{
+              audioSpeed = Math.min(1.35, ttsDur / slotDur);
+              const adjustedTtsDur = ttsDur / audioSpeed;
+              vid.playbackRate = Math.max(0.45, Math.min(1.0, slotDur / adjustedTtsDur));
+            }} else {{
+              vid.playbackRate = 1.0;
+            }}
+
+            srcNode.playbackRate.value = audioSpeed;
+            srcNode.connect(dest); // Record into final video file!
+            srcNode.connect(audioCtx.destination); // Also play out loud so user hears progress
+            srcNode.start(0);
+
+            srcNode.onended = () => {{
+              vid.playbackRate = 1.0;
+            }};
           }}
         }});
-        requestAnimationFrame(syncLoop);
+
+        renderCanvasFrame(activeSegText);
+        requestAnimationFrame(syncRenderLoop);
       }}
     }}
-    syncLoop();
+    syncRenderLoop();
 
     vid.onended = () => {{
       if (recorder.state === "recording") recorder.stop();
     }};
 
   }} catch (err) {{
+    b1.style.opacity = '1';
+    b2.style.opacity = '1';
+    subBox.style.opacity = '1';
     logBox.style.color = "#ff5252";
     logBox.innerText = "❌ Error: " + err.message;
     procBtn.disabled = false;
@@ -615,4 +811,4 @@ procBtn.onclick = async () => {{
 </html>
 """
 
-components.html(studio99_app, height=900, scrolling=True)
+components.html(studio99_app, height=940, scrolling=True)
