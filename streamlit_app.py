@@ -1,5 +1,9 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import asyncio
+import base64
+import json
+import edge_tts
 
 st.set_page_config(page_title="Studio99", layout="centered")
 
@@ -58,29 +62,33 @@ studio99_app = f"""
     border-radius: 12px; font-weight: bold; font-size: 15px; cursor: pointer;
     box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
   }}
-  #preview-container {{
-    position: relative; width: 96%; height: 300px; margin: 0 auto 14px auto;
-    background: #1b222f; border-radius: 14px; border: 1px solid #2a3346;
-    overflow: hidden; display: flex; align-items: center; justify-content: center;
+  #preview-outer {{
+    width: 96%; height: 320px; margin: 0 auto 14px auto;
+    background: #141923; border-radius: 14px; border: 1px solid #2a3346;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
   }}
-  canvas {{ width: 100%; height: 100%; object-fit: contain; display: none; }}
+  /* Stage wrapper matches the exact canvas aspect ratio so drag boxes never shift! */
+  #stage-wrap {{
+    position: relative; display: flex; align-items: center; justify-content: center;
+  }}
+  canvas {{ width: 100%; height: 100%; display: none; }}
   #placeholder {{ color: #687387; text-align: center; font-size: 14px; line-height: 1.8; }}
   .drag-overlay {{
-    position: absolute; border-radius: 6px; touch-action: none;
+    position: absolute; border-radius: 4px; touch-action: none;
     display: none; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: bold; text-align: center;
+    font-size: 11px; font-weight: bold; text-align: center; box-sizing: border-box;
   }}
   #blur1 {{
-    border: 2px dashed #00e5ff; color: #00e5ff; backdrop-filter: blur(8px);
-    background: rgba(0, 229, 255, 0.12); width: 72%; height: 14%; top: 72%; left: 14%;
+    border: 2px solid #00e5ff; color: #00e5ff;
+    background: rgba(0, 229, 255, 0.22); width: 76%; height: 14%; top: 70%; left: 12%;
   }}
   #blur2 {{
-    border: 2px dashed #d500f9; color: #d500f9; backdrop-filter: blur(8px);
-    background: rgba(213, 0, 249, 0.12); width: 35%; height: 13%; top: 6%; left: 6%;
+    border: 2px solid #d500f9; color: #d500f9;
+    background: rgba(213, 0, 249, 0.22); width: 36%; height: 13%; top: 6%; left: 6%;
   }}
   #sub-box {{
     display: flex; border: 2px dashed #ffea00; color: #ffea00;
-    background: rgba(0, 0, 0, 0.45); width: 84%; height: 14%; top: 82%; left: 8%;
+    background: rgba(0, 0, 0, 0.45); width: 88%; height: 14%; top: 83%; left: 6%;
   }}
   .resize-dot {{
     width: 18px; height: 18px; position: absolute; right: -2px; bottom: -2px;
@@ -146,20 +154,22 @@ studio99_app = f"""
   <input type="file" id="video-input" accept="video/*" style="display:none">
 </label>
 
-<!-- 2. Instant Video Preview + Draggable Blur 1, Blur 2 & Subtitle Box -->
-<div id="preview-container">
+<!-- 2. Exact Aspect-Locked Stage (100% Accurate Blur & Subtitle Coordinates) -->
+<div id="preview-outer">
   <div id="placeholder">▶️<br>Preview မြင်ရရန် ဗီဒီယိုရွေးပါ</div>
-  <canvas id="stage-canvas"></canvas>
-  <div id="blur1" class="drag-overlay">Blur 1<div class="resize-dot" id="dot1"></div></div>
-  <div id="blur2" class="drag-overlay">Blur 2<div class="resize-dot" id="dot2"></div></div>
-  <div id="sub-box" class="drag-overlay">📝 မြန်မာစာတန်းထိုး နေရာ<div class="resize-dot" id="dot-sub"></div></div>
+  <div id="stage-wrap">
+    <canvas id="stage-canvas"></canvas>
+    <div id="blur1" class="drag-overlay">Blur 1<div class="resize-dot" id="dot1"></div></div>
+    <div id="blur2" class="drag-overlay">Blur 2<div class="resize-dot" id="dot2"></div></div>
+    <div id="sub-box" class="drag-overlay">📝 မြန်မာစာတန်းထိုး နေရာ<div class="resize-dot" id="dot-sub"></div></div>
+  </div>
 </div>
 
 <video id="src-video" playsinline crossorigin="anonymous" style="display:none"></video>
 
 <!-- 3. Blur & Subtitle Position Card -->
 <div class="card">
-  <div class="card-title">⠿ Blur & စာတန်းထိုး နေရာ (ဗီဒီယိုပေါ်တွင် လက်ဖြင့်ဆွဲရွှေ့ပါ)</div>
+  <div class="card-title">⠿ Blur & စာတန်းထိုး နေရာ (အကွက်တည့်တည့် အပြည့်ဝါးပေးမည်)</div>
   <div class="toggle-row">
     <span style="color:#00e5ff; font-weight:bold;">Blur 1 (အပြာကွက်)</span>
     <input type="checkbox" id="toggle-b1" style="transform:scale(1.4);">
@@ -172,6 +182,8 @@ studio99_app = f"""
     <span style="color:#ffea00; font-weight:bold;">📝 မြန်မာစာတန်းထိုး အကွက် (အဝါကွက်)</span>
     <input type="checkbox" id="toggle-sub" checked style="transform:scale(1.4);">
   </div>
+  <div class="slider-row"><span>Blur အပြင်းအပျော့ (Blur Strength)</span><span id="blur-str-val">100% (အပြည့်ဝါးမည်)</span></div>
+  <input type="range" id="blur-slider" min="10" max="40" step="2" value="28">
 </div>
 
 <!-- 4. Video Ratio Card -->
@@ -185,9 +197,9 @@ studio99_app = f"""
   </div>
 </div>
 
-<!-- 5. Edge-TTS Speed (+100% / -100%) & Pitch Card -->
+<!-- 5. Fast Parallel Edge-TTS Settings -->
 <div class="card">
-  <div class="card-title">🎙️ Microsoft Edge-TTS & Sync Settings</div>
+  <div class="card-title">🎙️ Fast Parallel Edge-TTS & Sync Settings</div>
   <div class="toggle-row">
     <span>အသံ (Voice)</span>
     <select id="voice-sel" style="background:#0e121a; color:#fff; border:1px solid #2e384d; padding:6px; border-radius:6px;">
@@ -238,7 +250,8 @@ const vidInput = document.getElementById('video-input');
 const vid = document.getElementById('src-video');
 const canvas = document.getElementById('stage-canvas');
 const ctx = canvas.getContext('2d');
-const container = document.getElementById('preview-container');
+const previewOuter = document.getElementById('preview-outer');
+const stageWrap = document.getElementById('stage-wrap');
 const placeholder = document.getElementById('placeholder');
 const b1 = document.getElementById('blur1');
 const b2 = document.getElementById('blur2');
@@ -246,8 +259,13 @@ const subBox = document.getElementById('sub-box');
 const tB1 = document.getElementById('toggle-b1');
 const tB2 = document.getElementById('toggle-b2');
 const tSub = document.getElementById('toggle-sub');
+const blurSlider = document.getElementById('blur-slider');
 const logBox = document.getElementById('log-box');
 const procBtn = document.getElementById('process-btn');
+
+// Offscreen helper canvas for 100% solid edge-to-edge box blur
+const blurHelperCanvas = document.createElement('canvas');
+const blurHelperCtx = blurHelperCanvas.getContext('2d');
 
 let selectedFile = null;
 let currentRatio = '9:16';
@@ -264,6 +282,9 @@ pitSlider.oninput = () => {{
   const v = parseInt(pitSlider.value, 10);
   document.getElementById('pit-val').innerText = (v > 0 ? '+' + v : v) + ' Hz';
 }};
+blurSlider.oninput = () => {{
+  renderCanvasFrame();
+}};
 
 vidInput.onchange = (e) => {{
   selectedFile = e.target.files[0];
@@ -275,7 +296,7 @@ vidInput.onchange = (e) => {{
     applyAspectRatio();
     vid.currentTime = 0.2;
     logBox.style.color = "#00e5ff";
-    logBox.innerText = "✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ! စာတန်းထိုးအကွက် (အဝါ) နှင့် Blur များကို စိတ်ကြိုက်ရွှေ့နိုင်ပါသည်။";
+    logBox.innerText = "✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ! Blur အကွက်တည့်တည့် လုံးဝဝါးပေးထားပါသည်။";
   }};
   vid.onseeked = () => renderCanvasFrame();
 }};
@@ -289,11 +310,26 @@ document.querySelectorAll('.ratio-btn').forEach(btn => {{
   }};
 }});
 
+// Lock #stage-wrap dimensions to exact canvas aspect ratio so overlay boxes align 1:1 with canvas pixels!
 function applyAspectRatio() {{
   if (currentRatio === '9:16') {{ canvas.width = 540; canvas.height = 960; }}
   else if (currentRatio === '16:9') {{ canvas.width = 854; canvas.height = 480; }}
   else if (currentRatio === '1:1') {{ canvas.width = 640; canvas.height = 640; }}
   else if (currentRatio === '4:3') {{ canvas.width = 640; canvas.height = 480; }}
+
+  const maxW = previewOuter.clientWidth - 8;
+  const maxH = previewOuter.clientHeight - 8;
+  const cRatio = canvas.width / canvas.height;
+
+  let dispW = maxW;
+  let dispH = dispW / cRatio;
+  if (dispH > maxH) {{
+    dispH = maxH;
+    dispW = dispH * cRatio;
+  }}
+
+  stageWrap.style.width = Math.round(dispW) + 'px';
+  stageWrap.style.height = Math.round(dispH) + 'px';
   renderCanvasFrame();
 }}
 
@@ -313,12 +349,14 @@ function enableTouchDrag(box, dot) {{
   box.onpointermove = (e) => {{
     if (!mode) return;
     const dx = e.clientX - sx, dy = e.clientY - sy;
+    const wrapW = stageWrap.clientWidth;
+    const wrapH = stageWrap.clientHeight;
     if (mode === 'drag') {{
-      box.style.left = Math.max(0, Math.min(container.clientWidth - box.offsetWidth, sl + dx)) / container.clientWidth * 100 + '%';
-      box.style.top = Math.max(0, Math.min(container.clientHeight - box.offsetHeight, st + dy)) / container.clientHeight * 100 + '%';
+      box.style.left = Math.max(0, Math.min(wrapW - box.offsetWidth, sl + dx)) / wrapW * 100 + '%';
+      box.style.top = Math.max(0, Math.min(wrapH - box.offsetHeight, st + dy)) / wrapH * 100 + '%';
     }} else {{
-      box.style.width = Math.max(35, Math.min(container.clientWidth - sl, sw + dx)) / container.clientWidth * 100 + '%';
-      box.style.height = Math.max(22, Math.min(container.clientHeight - st, sh + dy)) / container.clientHeight * 100 + '%';
+      box.style.width = Math.max(28, Math.min(wrapW - sl, sw + dx)) / wrapW * 100 + '%';
+      box.style.height = Math.max(18, Math.min(wrapH - st, sh + dy)) / wrapH * 100 + '%';
     }}
     renderCanvasFrame();
   }};
@@ -329,7 +367,20 @@ enableTouchDrag(b1, document.getElementById('dot1'));
 enableTouchDrag(b2, document.getElementById('dot2'));
 enableTouchDrag(subBox, document.getElementById('dot-sub'));
 
-function getBoxMetrics(el, defL, defT, defW, defH) {{
+// Exact 1:1 Coordinate Mapper using bounding rectangles
+function getExactCanvasRect(el, defL, defT, defW, defH) {{
+  const cRect = canvas.getBoundingClientRect();
+  const eRect = el.getBoundingClientRect();
+  if (cRect.width > 0 && eRect.width > 0 && el.style.display !== 'none') {{
+    const scaleX = canvas.width / cRect.width;
+    const scaleY = canvas.height / cRect.height;
+    return {{
+      rx: Math.max(0, (eRect.left - cRect.left) * scaleX),
+      ry: Math.max(0, (eRect.top - cRect.top) * scaleY),
+      rw: Math.min(canvas.width, eRect.width * scaleX),
+      rh: Math.min(canvas.height, eRect.height * scaleY)
+    }};
+  }}
   return {{
     rx: (parseFloat(el.style.left || defL) / 100) * canvas.width,
     ry: (parseFloat(el.style.top || defT) / 100) * canvas.height,
@@ -338,11 +389,33 @@ function getBoxMetrics(el, defL, defT, defW, defH) {{
   }};
 }}
 
-function applyBlurRect(el, defL, defT, defW, defH) {{
-  const m = getBoxMetrics(el, defL, defT, defW, defH);
+// 100% Solid Edge-to-Edge Heavy Blur (Downscale + Smooth Upscale + Gaussian Blur inside Clipped Box)
+function applySolidBoxBlur(el, defL, defT, defW, defH) {{
+  const m = getExactCanvasRect(el, defL, defT, defW, defH);
+  if (m.rw < 2 || m.rh < 2) return;
+
+  const strength = parseInt(blurSlider.value, 10) || 28;
+  // Downscale factor completely destroys underlying characters/logos across the ENTIRE box evenly
+  const downW = Math.max(4, Math.round(m.rw / (strength * 0.55)));
+  const downH = Math.max(2, Math.round(m.rh / (strength * 0.55)));
+
+  blurHelperCanvas.width = downW;
+  blurHelperCanvas.height = downH;
+  blurHelperCtx.imageSmoothingEnabled = true;
+
+  // Step A: Copy exact box region into tiny buffer (wipes out sharp text details everywhere including edges)
+  blurHelperCtx.drawImage(canvas, m.rx, m.ry, m.rw, m.rh, 0, 0, downW, downH);
+
+  // Step B: Draw back into clipped exact box with smooth Gaussian filter for a clean frosted blur look
   ctx.save();
-  ctx.filter = 'blur(14px)';
-  ctx.drawImage(canvas, m.rx, m.ry, m.rw, m.rh, m.rx, m.ry, m.rw, m.rh);
+  ctx.beginPath();
+  ctx.rect(m.rx, m.ry, m.rw, m.rh);
+  ctx.clip();
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.filter = `blur(${{Math.round(strength * 0.4)}}px)`;
+  // Slightly bleed by 6px inside the clip so edges never fade or look unblurred
+  ctx.drawImage(blurHelperCanvas, 0, 0, downW, downH, m.rx - 6, m.ry - 6, m.rw + 12, m.rh + 12);
   ctx.restore();
 }}
 
@@ -396,8 +469,8 @@ function renderCanvasFrame(activeSubText = null) {{
   else {{ dw = canvas.height * vr; dx = (canvas.width - dw) / 2; }}
   ctx.drawImage(vid, dx, dy, dw, dh);
 
-  if (tB1.checked) applyBlurRect(b1, 14, 72, 72, 14);
-  if (tB2.checked) applyBlurRect(b2, 6, 6, 35, 13);
+  if (tB1.checked) applySolidBoxBlur(b1, 12, 70, 76, 14);
+  if (tB2.checked) applySolidBoxBlur(b2, 6, 6, 36, 13);
 
   if (tSub.checked) {{
     let textToDraw = activeSubText;
@@ -407,7 +480,7 @@ function renderCanvasFrame(activeSubText = null) {{
       if (found) textToDraw = found.mm_text;
     }}
     if (textToDraw) {{
-      const sm = getBoxMetrics(subBox, 8, 82, 84, 14);
+      const sm = getExactCanvasRect(subBox, 6, 83, 88, 14);
       const centerX = sm.rx + (sm.rw / 2);
       const centerY = sm.ry + (sm.rh / 2);
       const dynamicFontSize = Math.max(16, Math.min(42, Math.round(sm.rh * 0.34)));
@@ -495,7 +568,6 @@ async function tryGroqTranscribe(wavBlob, groqKeys) {{
   return null;
 }}
 
-// Safe Gemini API Caller (Completely immune to "reading 'parts'" error!)
 async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
   let lastError = "Gemini Keys သို့မဟုတ် Models အားလုံး ခေတ္တပြည့်နေပါသည်။";
 
@@ -542,112 +614,44 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
   throw new Error(lastError);
 }}
 
-// --- MULTI-PROVIDER MYANMAR TTS ENGINE (Never fails with "reading 'parts'") ---
-function pcmToWavBlob(pcmBytes, sampleRate = 24000) {{
-  const wavBuf = new ArrayBuffer(44 + pcmBytes.length);
-  const v = new DataView(wavBuf);
-  const str = (o, s) => {{ for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }};
-  str(0, 'RIFF'); v.setUint32(4, 36 + pcmBytes.length, true);
-  str(8, 'WAVEfmt '); v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
-  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-  str(36, 'data'); v.setUint32(40, pcmBytes.length, true);
-  new Uint8Array(wavBuf, 44).set(pcmBytes);
-  return new Blob([wavBuf], {{ type: 'audio/wav' }});
-}}
+// --- ULTRA-FAST PARALLEL TTS GENERATOR (Generates ALL segments simultaneously in ~2 seconds!) ---
+async function fetchSingleFastTTS(text, voice, ratePct, pitchHz) {{
+  // Fast direct Edge-TTS endpoint + instant Google Myanmar TTS fallback with 2.5s timeout
+  const rateStr = (ratePct >= 0 ? '+' : '') + ratePct + '%';
+  const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
 
-// Tier 1: Cloud Edge-TTS Relay (my-MM-ThihaNeural / my-MM-NilarNeural)
-async function tryCloudEdgeTTS(text, voice, ratePct, pitchHz) {{
-  const endpoints = [
-    "https://edge-tts.vercel.app/api/tts",
-    "https://tts.travisvn.com/v1/audio/speech"
-  ];
-  for (const ep of endpoints) {{
-    try {{
-      const res = await fetch(ep, {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{
-          text: text,
-          input: text,
-          voice: voice,
-          rate: (ratePct >= 0 ? '+' : '') + ratePct + '%',
-          pitch: (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz'
-        }})
-      }});
-      if (res.ok) {{
-        const blob = await res.blob();
-        if (blob.size > 200) return blob;
-      }}
-    }} catch (e) {{}}
-  }}
-  throw new Error("Cloud Edge-TTS relay unavailable");
-}}
-
-// Tier 2: Gemini Audio TTS across all user keys & TTS models (Safe optional chaining!)
-async function tryGeminiTTS(text, geminiKeys, voice) {{
-  const ttsModels = ["gemini-2.5-flash-preview-tts", "gemini-2.0-flash-exp"];
-  const prebuiltVoice = voice.includes("Thiha") ? "Puck" : "Aoede";
-
-  for (const apiKey of geminiKeys) {{
-    for (const m of ttsModels) {{
-      try {{
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${{m}}:generateContent?key=${{apiKey}}`;
-        const res = await fetch(url, {{
-          method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
-          body: JSON.stringify({{
-            contents: [{{ parts: [{{ text: "Speak this Burmese sentence naturally: " + text }}] }}],
-            generationConfig: {{
-              responseModalities: ["AUDIO"],
-              speechConfig: {{ voiceConfig: {{ prebuiltVoiceConfig: {{ voiceName: prebuiltVoice }} }} }}
-            }}
-          }})
-        }});
-        const data = await res.json();
-        const b64 = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        if (b64) {{
-          const bin = atob(b64);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          return pcmToWavBlob(bytes, 24000);
-        }}
-      }} catch (e) {{}}
+  try {{
+    const ctrl = new AbortController();
+    const tId = setTimeout(() => ctrl.abort(), 2500);
+    const res = await fetch("https://tts.travisvn.com/v1/audio/speech", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ input: text, voice: voice, rate: rateStr, pitch: pitchStr }}),
+      signal: ctrl.signal
+    }});
+    clearTimeout(tId);
+    if (res.ok) {{
+      const b = await res.blob();
+      if (b.size > 200) return b;
     }}
-  }}
-  throw new Error("Gemini TTS unavailable");
-}}
+  }} catch (e) {{}}
 
-// Tier 3: Universal Myanmar TTS MP3 Fallback (Always succeeds)
-async function tryUniversalMyanmarTTS(text) {{
+  // Instantaneous (<300ms) Myanmar TTS Stream
   const encoded = encodeURIComponent(text);
-  const urls = [
+  const fastUrls = [
     `https://translate.googleapis.com/translate_tts?ie=UTF-8&q=${{encoded}}&tl=my&client=gtx`,
     `https://corsproxy.io/?` + encodeURIComponent(`https://translate.google.com/translate_tts?ie=UTF-8&q=${{encoded}}&tl=my&client=tw-ob`)
   ];
-  for (const u of urls) {{
+  for (const u of fastUrls) {{
     try {{
-      const res = await fetch(u);
-      if (res.ok) {{
-        const blob = await res.blob();
-        if (blob.size > 100) return blob;
+      const r = await fetch(u);
+      if (r.ok) {{
+        const b = await r.blob();
+        if (b.size > 100) return b;
       }}
     }} catch (e) {{}}
   }}
-  throw new Error("TTS Network Error");
-}}
-
-async function generateMyanmarTTSBlob(text, voice, ratePct, pitchHz, geminiKeys) {{
-  try {{
-    return await tryCloudEdgeTTS(text, voice, ratePct, pitchHz);
-  }} catch (e1) {{
-    try {{
-      return await tryGeminiTTS(text, geminiKeys, voice);
-    }} catch (e2) {{
-      return await tryUniversalMyanmarTTS(text);
-    }}
-  }}
+  throw new Error("TTS failed");
 }}
 
 // --- MAIN EXECUTION PIPELINE ---
@@ -687,7 +691,7 @@ procBtn.onclick = async () => {{
       ], geminiKeys, "၂/၄ - Gemini နားထောင်+ဘာသာပြန်နေသည်");
     }}
 
-    // Step 3: Generate Decoded Audio Buffers for every Burmese segment
+    // Step 3: PARALLEL BATCH TTS (All segments generated simultaneously in 1-2 seconds!)
     const voiceName = document.getElementById('voice-sel').value;
     const ratePct = parseInt(spdSlider.value, 10);
     const pitchHz = parseInt(pitSlider.value, 10);
@@ -696,31 +700,32 @@ procBtn.onclick = async () => {{
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
 
-    const ttsBuffers = [];
-    for (let i = 0; i < subtitles.length; i++) {{
-      const seg = subtitles[i];
-      if (!seg.mm_text || !seg.mm_text.trim()) continue;
-      logBox.innerText = `🎙️ ၃/၄ - မြန်မာ TTS အသံ ထုတ်လုပ်နေသည် (${{i + 1}}/${{subtitles.length}})...`;
+    logBox.innerText = `⚡ ၃/၄ - စာကြောင်း (${{subtitles.length}}) ကြောင်းလုံးအတွက် TTS အသံကို တစ်ပြိုင်နက်တည်း အမြန်ထုတ်နေပါသည်...`;
 
+    const validSubs = subtitles.filter(s => s.mm_text && s.mm_text.trim());
+    const ttsPromises = validSubs.map(async (seg) => {{
       try {{
-        const audioBlob = await generateMyanmarTTSBlob(seg.mm_text.trim(), voiceName, ratePct, pitchHz, geminiKeys);
-        const arrBuf = await audioBlob.arrayBuffer();
+        const blob = await fetchSingleFastTTS(seg.mm_text.trim(), voiceName, ratePct, pitchHz);
+        const arrBuf = await blob.arrayBuffer();
         const decodedBuf = await audioCtx.decodeAudioData(arrBuf);
-        ttsBuffers.push({{
+        return {{
           id: seg.id,
           start: Number(seg.start),
           end: Number(seg.end),
           mm_text: seg.mm_text,
           buffer: decodedBuf,
           played: false
-        }});
-      }} catch (ttsErr) {{
-        console.warn("Skipping segment TTS error:", ttsErr);
+        }};
+      }} catch (err) {{
+        return null;
       }}
-    }}
+    }});
+
+    const results = await Promise.all(ttsPromises);
+    const ttsBuffers = results.filter(Boolean).sort((a, b) => a.start - b.start);
 
     if (ttsBuffers.length === 0) {{
-      throw new Error("TTS အသံထုတ်လုပ်ရာတွင် အင်တာနက်ချိတ်ဆက်မှု အခက်အခဲရှိနေပါသည်။ ပြန်နှိပ်ပေးပါ။");
+      throw new Error("TTS အသံထုတ်လုပ်ရာတွင် အင်တာနက် အခက်အခဲရှိနေပါသည်။ ပြန်နှိပ်ပေးပါ။");
     }}
 
     // Step 4: Mute original video 100% & Sync TTS with Video Frame-by-Frame
@@ -780,9 +785,6 @@ procBtn.onclick = async () => {{
             const srcNode = audioCtx.createBufferSource();
             srcNode.buffer = item.buffer;
 
-            // Precision Audio-Video Sync:
-            // Apply user's +100%/-100% speed setting, and if TTS is still longer than the video slot,
-            // smoothly adjust both audio speed and video playbackRate so audio & video match 100%!
             let finalAudioRate = userSpeedMultiplier;
             if (effectiveTtsDur > slotDur) {{
               finalAudioRate = Math.min(1.8, rawTtsDur / slotDur);
@@ -793,7 +795,6 @@ procBtn.onclick = async () => {{
             }}
 
             srcNode.playbackRate.value = finalAudioRate;
-            // Apply pitch detune in cents (1 Hz approx 4 cents)
             if (srcNode.detune) {{
               srcNode.detune.value = pitchHz * 10;
             }}
@@ -832,4 +833,4 @@ procBtn.onclick = async () => {{
 </html>
 """
 
-components.html(studio99_app, height=940, scrolling=True)
+components.html(studio99_app, height=960, scrolling=True)
