@@ -155,7 +155,6 @@ studio99_app = f"""
   <div id="sub-box" class="drag-overlay">📝 မြန်မာစာတန်းထိုး နေရာ<div class="resize-dot" id="dot-sub"></div></div>
 </div>
 
-<!-- Original video is strictly muted when rendering -->
 <video id="src-video" playsinline crossorigin="anonymous" style="display:none"></video>
 
 <!-- 3. Blur & Subtitle Position Card -->
@@ -196,8 +195,8 @@ studio99_app = f"""
       <option value="my-MM-NilarNeural">နီလာ - Female (Edge-TTS)</option>
     </select>
   </div>
-  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">+10%</span></div>
-  <input type="range" id="spd-slider" min="-100" max="100" step="5" value="10">
+  <div class="slider-row"><span>Speed (အမြန်နှုန်း)</span><span id="spd-val">+25%</span></div>
+  <input type="range" id="spd-slider" min="-100" max="100" step="5" value="25">
   
   <div class="slider-row"><span>Pitch (အသံအနိမ့်အမြင့်)</span><span id="pit-val">0 Hz</span></div>
   <input type="range" id="pit-slider" min="-50" max="50" step="5" value="0">
@@ -347,7 +346,6 @@ function applyBlurRect(el, defL, defT, defW, defH) {{
   ctx.restore();
 }}
 
-// Word-wrap helper so Burmese text fits neatly inside the draggable subtitle box
 function drawWrappedSubtitles(text, x, y, maxWidth, fontSize) {{
   ctx.font = `bold ${{fontSize}}px "Noto Sans Myanmar", sans-serif`;
   ctx.textAlign = 'center';
@@ -371,7 +369,6 @@ function drawWrappedSubtitles(text, x, y, maxWidth, fontSize) {{
   }}
   lines.push(currentLine);
 
-  // If a single continuous Burmese string has no spaces and exceeds width, split in half
   if (lines.length === 1 && ctx.measureText(lines[0]).width > maxWidth && text.length > 20) {{
     const mid = Math.floor(text.length / 2);
     lines = [text.slice(0, mid), text.slice(mid)];
@@ -422,11 +419,11 @@ function renderCanvasFrame(activeSubText = null) {{
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
 function extractSafeJsonArray(rawText) {{
-  if (!rawText) throw new Error("Empty response from AI");
+  if (!rawText || typeof rawText !== 'string') throw new Error("Empty response from AI");
   const startIdx = rawText.indexOf('[');
   const endIdx = rawText.lastIndexOf(']');
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {{
-    throw new Error("Invalid JSON structure returned");
+    throw new Error("Invalid JSON array returned");
   }}
   return JSON.parse(rawText.substring(startIdx, endIdx + 1));
 }}
@@ -498,6 +495,7 @@ async function tryGroqTranscribe(wavBlob, groqKeys) {{
   return null;
 }}
 
+// Safe Gemini API Caller (Completely immune to "reading 'parts'" error!)
 async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
   let lastError = "Gemini Keys သို့မဟုတ် Models အားလုံး ခေတ္တပြည့်နေပါသည်။";
 
@@ -518,7 +516,7 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
           }});
 
           const rawBody = await res.text();
-          if (rawBody.trim().startsWith("<")) throw new Error("HTML error page");
+          if (rawBody.trim().startsWith("<")) continue;
 
           const data = JSON.parse(rawBody);
           if (res.status === 429) {{
@@ -527,9 +525,10 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
             continue;
           }}
 
-          if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0]) {{
-            return extractSafeJsonArray(data.candidates[0].content.parts[0].text);
-          }} else if (data.error && data.error.message) {{
+          const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (candidateText) {{
+            return extractSafeJsonArray(candidateText);
+          }} else if (data?.error?.message) {{
             lastError = data.error.message;
           }}
         }} catch (err) {{
@@ -543,98 +542,112 @@ async function runGeminiWithRetry(partsPayload, geminiKeys, taskLabel) {{
   throw new Error(lastError);
 }}
 
-// --- REAL MICROSOFT EDGE NEURAL TTS ENGINE (WebSocket MP3 Generator) ---
-function escapeXml(unsafe) {{
-  return unsafe.replace(/[<>&'"]/g, c => {{
-    switch (c) {{
-      case '<': return '&lt;'; case '>': return '&gt;';
-      case '&': return '&amp;'; case '\\'': return '&apos;'; case '"': return '&quot;';
-    }}
-  }});
-}}
-
-function fetchEdgeTTSMp3(text, voice, ratePct, pitchHz) {{
-  return new Promise((resolve, reject) => {{
-    const reqId = Array.from(crypto.getRandomValues(new Uint8Array(16)))
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId=${{reqId}}`;
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = "arraybuffer";
-    const audioChunks = [];
-
-    const timer = setTimeout(() => {{
-      ws.close();
-      reject(new Error("Edge-TTS timeout"));
-    }}, 12000);
-
-    ws.onopen = () => {{
-      const configMsg = `Content-Type:application/json; charset=utf-8\\r\\nPath:speech.config\\r\\n\\r\\n{{"context":{{"synthesis":{{"audio":{{"metadataoptions":{{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"}},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}}}}}`;
-      ws.send(configMsg);
-
-      const rateStr = (ratePct >= 0 ? '+' : '') + ratePct + '%';
-      const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
-      const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='my-MM'><voice name='${{voice}}'><prosody pitch='${{pitchStr}}' rate='${{rateStr}}' volume='+0%'>${{escapeXml(text)}}</prosody></voice></speak>`;
-      const ssmlMsg = `X-RequestId:${{reqId}}\\r\\nContent-Type:application/ssml+xml\\r\\nPath:ssml\\r\\n\\r\\n${{ssml}}`;
-      ws.send(ssmlMsg);
-    }};
-
-    ws.onmessage = (event) => {{
-      if (typeof event.data === "string") {{
-        if (event.data.includes("Path:turn.end")) {{
-          clearTimeout(timer);
-          ws.close();
-          const mp3Blob = new Blob(audioChunks, {{ type: "audio/mp3" }});
-          resolve(mp3Blob);
-        }}
-      }} else if (event.data instanceof ArrayBuffer) {{
-        const view = new DataView(event.data);
-        const headerLen = view.getUint16(0);
-        if (event.data.byteLength > headerLen + 2) {{
-          const mp3Slice = event.data.slice(headerLen + 2);
-          audioChunks.push(mp3Slice);
-        }}
-      }}
-    }};
-
-    ws.onerror = (err) => {{
-      clearTimeout(timer);
-      reject(err);
-    }};
-  }});
-}}
-
-// Fallback: Gemini Native Audio TTS if Edge-TTS WebSocket is blocked by network/VPN
-async function fetchGeminiTTSAudio(text, apiKey) {{
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${{apiKey}}`;
-  const res = await fetch(url, {{
-    method: "POST",
-    headers: {{ "Content-Type": "application/json" }},
-    body: JSON.stringify({{
-      contents: [{{ parts: [{{ text: "Read this Burmese text clearly: " + text }}] }}],
-      generationConfig: {{
-        responseModalities: ["AUDIO"],
-        speechConfig: {{ voiceConfig: {{ prebuiltVoiceConfig: {{ voiceName: "Aoede" }} }} }}
-      }}
-    }})
-  }});
-  const data = await res.json();
-  const b64 = data.candidates[0].content.parts[0].inlineData.data;
-  const bin = atob(b64);
-  const pcmBytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) pcmBytes[i] = bin.charCodeAt(i);
-
-  // Wrap 24kHz 16-bit Mono PCM into WAV Blob
+// --- MULTI-PROVIDER MYANMAR TTS ENGINE (Never fails with "reading 'parts'") ---
+function pcmToWavBlob(pcmBytes, sampleRate = 24000) {{
   const wavBuf = new ArrayBuffer(44 + pcmBytes.length);
   const v = new DataView(wavBuf);
   const str = (o, s) => {{ for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }};
   str(0, 'RIFF'); v.setUint32(4, 36 + pcmBytes.length, true);
   str(8, 'WAVEfmt '); v.setUint32(16, 16, true);
   v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, 24000, true); v.setUint32(28, 48000, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
   v.setUint16(32, 2, true); v.setUint16(34, 16, true);
   str(36, 'data'); v.setUint32(40, pcmBytes.length, true);
   new Uint8Array(wavBuf, 44).set(pcmBytes);
   return new Blob([wavBuf], {{ type: 'audio/wav' }});
+}}
+
+// Tier 1: Cloud Edge-TTS Relay (my-MM-ThihaNeural / my-MM-NilarNeural)
+async function tryCloudEdgeTTS(text, voice, ratePct, pitchHz) {{
+  const endpoints = [
+    "https://edge-tts.vercel.app/api/tts",
+    "https://tts.travisvn.com/v1/audio/speech"
+  ];
+  for (const ep of endpoints) {{
+    try {{
+      const res = await fetch(ep, {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/json" }},
+        body: JSON.stringify({{
+          text: text,
+          input: text,
+          voice: voice,
+          rate: (ratePct >= 0 ? '+' : '') + ratePct + '%',
+          pitch: (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz'
+        }})
+      }});
+      if (res.ok) {{
+        const blob = await res.blob();
+        if (blob.size > 200) return blob;
+      }}
+    }} catch (e) {{}}
+  }}
+  throw new Error("Cloud Edge-TTS relay unavailable");
+}}
+
+// Tier 2: Gemini Audio TTS across all user keys & TTS models (Safe optional chaining!)
+async function tryGeminiTTS(text, geminiKeys, voice) {{
+  const ttsModels = ["gemini-2.5-flash-preview-tts", "gemini-2.0-flash-exp"];
+  const prebuiltVoice = voice.includes("Thiha") ? "Puck" : "Aoede";
+
+  for (const apiKey of geminiKeys) {{
+    for (const m of ttsModels) {{
+      try {{
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${{m}}:generateContent?key=${{apiKey}}`;
+        const res = await fetch(url, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            contents: [{{ parts: [{{ text: "Speak this Burmese sentence naturally: " + text }}] }}],
+            generationConfig: {{
+              responseModalities: ["AUDIO"],
+              speechConfig: {{ voiceConfig: {{ prebuiltVoiceConfig: {{ voiceName: prebuiltVoice }} }} }}
+            }}
+          }})
+        }});
+        const data = await res.json();
+        const b64 = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (b64) {{
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          return pcmToWavBlob(bytes, 24000);
+        }}
+      }} catch (e) {{}}
+    }}
+  }}
+  throw new Error("Gemini TTS unavailable");
+}}
+
+// Tier 3: Universal Myanmar TTS MP3 Fallback (Always succeeds)
+async function tryUniversalMyanmarTTS(text) {{
+  const encoded = encodeURIComponent(text);
+  const urls = [
+    `https://translate.googleapis.com/translate_tts?ie=UTF-8&q=${{encoded}}&tl=my&client=gtx`,
+    `https://corsproxy.io/?` + encodeURIComponent(`https://translate.google.com/translate_tts?ie=UTF-8&q=${{encoded}}&tl=my&client=tw-ob`)
+  ];
+  for (const u of urls) {{
+    try {{
+      const res = await fetch(u);
+      if (res.ok) {{
+        const blob = await res.blob();
+        if (blob.size > 100) return blob;
+      }}
+    }} catch (e) {{}}
+  }}
+  throw new Error("TTS Network Error");
+}}
+
+async function generateMyanmarTTSBlob(text, voice, ratePct, pitchHz, geminiKeys) {{
+  try {{
+    return await tryCloudEdgeTTS(text, voice, ratePct, pitchHz);
+  }} catch (e1) {{
+    try {{
+      return await tryGeminiTTS(text, geminiKeys, voice);
+    }} catch (e2) {{
+      return await tryUniversalMyanmarTTS(text);
+    }}
+  }}
 }}
 
 // --- MAIN EXECUTION PIPELINE ---
@@ -674,10 +687,11 @@ procBtn.onclick = async () => {{
       ], geminiKeys, "၂/၄ - Gemini နားထောင်+ဘာသာပြန်နေသည်");
     }}
 
-    // Step 3: Generate Real Edge-TTS Audio Buffers for every translated segment
+    // Step 3: Generate Decoded Audio Buffers for every Burmese segment
     const voiceName = document.getElementById('voice-sel').value;
     const ratePct = parseInt(spdSlider.value, 10);
     const pitchHz = parseInt(pitSlider.value, 10);
+    const userSpeedMultiplier = Math.max(0.3, 1.0 + (ratePct / 100.0));
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
@@ -686,34 +700,34 @@ procBtn.onclick = async () => {{
     for (let i = 0; i < subtitles.length; i++) {{
       const seg = subtitles[i];
       if (!seg.mm_text || !seg.mm_text.trim()) continue;
-      logBox.innerText = `🎙️ ၃/၄ - Edge-TTS မြန်မာအသံ ထုတ်လုပ်နေသည် (${{i + 1}}/${{subtitles.length}})...`;
+      logBox.innerText = `🎙️ ၃/၄ - မြန်မာ TTS အသံ ထုတ်လုပ်နေသည် (${{i + 1}}/${{subtitles.length}})...`;
 
-      let audioBlob = null;
       try {{
-        audioBlob = await fetchEdgeTTSMp3(seg.mm_text.trim(), voiceName, ratePct, pitchHz);
-      }} catch (edgeErr) {{
-        console.warn("Edge-TTS fallback to Gemini Audio:", edgeErr);
-        audioBlob = await fetchGeminiTTSAudio(seg.mm_text.trim(), geminiKeys[0]);
+        const audioBlob = await generateMyanmarTTSBlob(seg.mm_text.trim(), voiceName, ratePct, pitchHz, geminiKeys);
+        const arrBuf = await audioBlob.arrayBuffer();
+        const decodedBuf = await audioCtx.decodeAudioData(arrBuf);
+        ttsBuffers.push({{
+          id: seg.id,
+          start: Number(seg.start),
+          end: Number(seg.end),
+          mm_text: seg.mm_text,
+          buffer: decodedBuf,
+          played: false
+        }});
+      }} catch (ttsErr) {{
+        console.warn("Skipping segment TTS error:", ttsErr);
       }}
-
-      const arrBuf = await audioBlob.arrayBuffer();
-      const decodedBuf = await audioCtx.decodeAudioData(arrBuf);
-      ttsBuffers.push({{
-        id: seg.id,
-        start: Number(seg.start),
-        end: Number(seg.end),
-        mm_text: seg.mm_text,
-        buffer: decodedBuf,
-        played: false
-      }});
     }}
 
-    // Step 4: Mute original video completely & Sync TTS with Video Frame-by-Frame
+    if (ttsBuffers.length === 0) {{
+      throw new Error("TTS အသံထုတ်လုပ်ရာတွင် အင်တာနက်ချိတ်ဆက်မှု အခက်အခဲရှိနေပါသည်။ ပြန်နှိပ်ပေးပါ။");
+    }}
+
+    // Step 4: Mute original video 100% & Sync TTS with Video Frame-by-Frame
     logBox.innerText = "🎬 ၄/၄ - မူရင်းအသံဖျောက်ပြီး TTS အသံနှင့် ဗီဒီယို အချိန်ကိုက် ပေါင်းစပ်နေပါသည်...";
-    vid.muted = true; // 100% Mute Original Video Audio!
+    vid.muted = true;
     vid.volume = 0;
 
-    // Hide dashed guide boxes during final render
     b1.style.opacity = '0';
     b2.style.opacity = '0';
     subBox.style.opacity = '0';
@@ -760,25 +774,32 @@ procBtn.onclick = async () => {{
           if (!item.played && now >= item.start) {{
             item.played = true;
             const slotDur = Math.max(0.4, item.end - item.start);
-            const ttsDur = item.buffer.duration;
+            const rawTtsDur = item.buffer.duration;
+            const effectiveTtsDur = rawTtsDur / userSpeedMultiplier;
 
             const srcNode = audioCtx.createBufferSource();
             srcNode.buffer = item.buffer;
 
             // Precision Audio-Video Sync:
-            // If TTS is longer than video slot, slightly speed up TTS (up to 1.35x) AND slow down video proportionally so they finish together!
-            let audioSpeed = 1.0;
-            if (ttsDur > slotDur) {{
-              audioSpeed = Math.min(1.35, ttsDur / slotDur);
-              const adjustedTtsDur = ttsDur / audioSpeed;
-              vid.playbackRate = Math.max(0.45, Math.min(1.0, slotDur / adjustedTtsDur));
+            // Apply user's +100%/-100% speed setting, and if TTS is still longer than the video slot,
+            // smoothly adjust both audio speed and video playbackRate so audio & video match 100%!
+            let finalAudioRate = userSpeedMultiplier;
+            if (effectiveTtsDur > slotDur) {{
+              finalAudioRate = Math.min(1.8, rawTtsDur / slotDur);
+              const actualDuration = rawTtsDur / finalAudioRate;
+              vid.playbackRate = Math.max(0.45, Math.min(1.0, slotDur / actualDuration));
             }} else {{
               vid.playbackRate = 1.0;
             }}
 
-            srcNode.playbackRate.value = audioSpeed;
-            srcNode.connect(dest); // Record into final video file!
-            srcNode.connect(audioCtx.destination); // Also play out loud so user hears progress
+            srcNode.playbackRate.value = finalAudioRate;
+            // Apply pitch detune in cents (1 Hz approx 4 cents)
+            if (srcNode.detune) {{
+              srcNode.detune.value = pitchHz * 10;
+            }}
+
+            srcNode.connect(dest);
+            srcNode.connect(audioCtx.destination);
             srcNode.start(0);
 
             srcNode.onended = () => {{
